@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Literal, Optional, Protocol
 
 from security_monitor.swarm.agent_node import AgentNode
-from security_monitor.integration.wdk_settlement import WDKSettlementAdapter
+from security_monitor.integration.settlement_adapter import SettlementAdapter
 from security_monitor.swarm.messages import EXEC_START, EXEC_DONE
 
 logger = logging.getLogger(__name__)
@@ -37,10 +37,10 @@ class LangChainStyleAdapter:
 class GuardianAgent(AgentNode):
     """
     Guardian Agent: Responsible for active defense and transaction execution.
-    Handles settlement and execution logic using WDKSettlementAdapter.
+    Handles settlement and execution logic using settlement adapter integration.
     """
-    settlement_engine: WDKSettlementAdapter = field(default_factory=WDKSettlementAdapter)
-    execution_protocol: Literal["wdk", "ros2", "mavlink", "vendor_sdk"] = "wdk"
+    settlement_engine: SettlementAdapter = field(default_factory=SettlementAdapter)
+    execution_protocol: Literal["evm", "ros2", "mavlink", "vendor_sdk"] = "evm"
     orchestrator_mode: Literal["native_swarm", "external_framework_foxmq"] = "native_swarm"
     framework_name: str = "internal"
     external_adapter: Optional[ExternalAgentAdapter] = None
@@ -51,7 +51,7 @@ class GuardianAgent(AgentNode):
 
     def execute_committed_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """
-        Execute a task using the WDK logic when committed.
+        Execute a task using settlement logic when committed.
         """
         winner = self.committed_winner_by_task.get(task_id)
         if winner != self.agent_id:

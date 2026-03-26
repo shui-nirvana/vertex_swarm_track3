@@ -17,7 +17,7 @@ def _wait_for_terminal_state(kernel: CoordinationKernel, task_id: str, rounds: i
 
 
 def run_risk_control_scenario(backend: str = "simulated") -> Dict[str, Any]:
-    transport = build_transport(node_id="risk-kernel", backend=backend, fallback_to_simulated=True)
+    transport = build_transport(node_id="risk-kernel", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     kernel.register_agent("risk-sentinel", ["risk_assessment"])
     kernel.register_agent("risk-guardian", ["risk_mitigation"])
@@ -36,7 +36,7 @@ def run_risk_control_scenario(backend: str = "simulated") -> Dict[str, Any]:
 
 
 def run_risk_control_agent_driven_scenario(backend: str = "simulated") -> Dict[str, Any]:
-    transport = build_transport(node_id="risk-kernel-agent-driven", backend=backend, fallback_to_simulated=True)
+    transport = build_transport(node_id="risk-kernel-agent-driven", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     runtime = AgentPluginRuntime(
         agent_id="risk-agent-runtime",

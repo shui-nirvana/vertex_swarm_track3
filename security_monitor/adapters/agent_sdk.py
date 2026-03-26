@@ -13,7 +13,7 @@ class ExternalAgentSDK:
         backend: str = "mqtt",
         bridge_cmd: str | None = None,
         mqtt_addr: str | None = None,
-        fallback_to_simulated: bool = True,
+        fallback_to_simulated: bool = False,
         max_workers: int = 4,
         max_inflight: int = 64,
         plugin_timeout_s: float = 3.0,

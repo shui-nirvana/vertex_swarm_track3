@@ -223,7 +223,7 @@ class _FoxMqttClient:
         except Exception:
             return -1
 
-    def _on_connect(self, client: Any, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
+    def _on_connect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
         code = self._reason_code_to_int(reason_code)
         if code == 0:
             self._connected.set()
@@ -231,7 +231,7 @@ class _FoxMqttClient:
         self._connect_error = f"mqtt connection rejected by broker {self._mqtt_addr} with reason code {code}"
         self._connected.set()
 
-    def _on_message(self, client: Any, userdata: Any, message: Any) -> None:
+    def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
         try:
             payload = json.loads(message.payload.decode("utf-8"))
         except Exception:

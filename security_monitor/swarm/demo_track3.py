@@ -5,7 +5,7 @@ import statistics
 from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, cast
 
 from security_monitor.integration.foxmq_adapter import FoxMQAdapter
-from security_monitor.integration.wdk_settlement import WDKSettlementAdapter
+from security_monitor.integration.settlement_adapter import SettlementAdapter
 from security_monitor.swarm.agent_node import AgentNode, SwarmNetwork
 from security_monitor.swarm.fault_injector import FaultInjector
 from security_monitor.swarm.messages import (
@@ -113,7 +113,7 @@ def _create_agents(network: SwarmNetwork, worker_count: int = 2) -> Tuple[ScoutA
     nodes.append(scout_b)
 
     # Guardian (Worker)
-    protocol_pool: List[Literal["wdk", "ros2", "mavlink", "vendor_sdk"]] = ["ros2", "mavlink", "vendor_sdk"]
+    protocol_pool: List[Literal["evm", "ros2", "mavlink", "vendor_sdk"]] = ["evm", "ros2", "mavlink", "vendor_sdk"]
     for i in range(worker_count):
         orchestrator_mode: Literal["native_swarm", "external_framework_foxmq"] = "native_swarm"
         framework_name = "internal"
@@ -194,7 +194,7 @@ def run_demo(
             pass
 
     freeze_target_ms = 1000.0
-    payment_engine = WDKSettlementAdapter()
+    payment_engine = SettlementAdapter()
     payment_engine._balances["agent-client"] = {"USDT": 5.0}
     protection_fee = 0.5
     scout._broadcast(

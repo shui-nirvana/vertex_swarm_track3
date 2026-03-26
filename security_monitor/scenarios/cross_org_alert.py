@@ -17,7 +17,7 @@ def _wait_for_terminal_state(kernel: CoordinationKernel, task_id: str, rounds: i
 
 
 def run_cross_org_alert_scenario(backend: str = "simulated") -> Dict[str, Any]:
-    transport = build_transport(node_id="cross-org-kernel", backend=backend, fallback_to_simulated=True)
+    transport = build_transport(node_id="cross-org-kernel", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     kernel.register_agent("org-a-alert-node", ["alert_sync"])
     kernel.register_agent("org-b-alert-node", ["alert_sync"])
@@ -36,7 +36,7 @@ def run_cross_org_alert_scenario(backend: str = "simulated") -> Dict[str, Any]:
 
 
 def run_cross_org_alert_agent_driven_scenario(backend: str = "simulated") -> Dict[str, Any]:
-    transport = build_transport(node_id="cross-org-kernel-agent-driven", backend=backend, fallback_to_simulated=True)
+    transport = build_transport(node_id="cross-org-kernel-agent-driven", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     runtime = AgentPluginRuntime(
         agent_id="org-alert-runtime",

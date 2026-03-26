@@ -8,7 +8,7 @@ def build_transport(
     backend: str = "mqtt",
     bridge_cmd: str | None = None,
     mqtt_addr: str | None = None,
-    fallback_to_simulated: bool = True,
+    fallback_to_simulated: bool = False,
 ) -> BaseTransport:
     normalized_backend = str(backend).strip().lower() or "mqtt"
     if normalized_backend in {"simulated", "memory"}:
