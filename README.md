@@ -10,50 +10,60 @@ FoxMQ references:
 - Docs: https://docs.tashi.network/resources/foxmq/quick-start-direct
 - Releases: https://github.com/tashigg/foxmq/releases
 
-## Project Status
+## 60-Second Review
 
-- [x] Core Swarm Protocol (Discover, Bid, Commit, Execute, Verify)
-- [x] Leaderless Deterministic Consensus with single-winner and no-double-assignment guarantees
-- [x] Fault Resilience (delay/drop + partition/restart recovery with hive-memory resync)
-- [x] Verifiable Coordination Proofs (hash chain + anchor + offline verification via `verify_proof_document`)
-- [x] Security Hardening (signed envelopes, replay rejection, commit equivocation guard)
-- [x] Multi-Transport Execution (simulated, MQTT, official backend; single-node and 4-node cluster)
-- [x] Multi-vendor + Multi-hop Coordination (ros2 / mavlink / vendor_sdk with route/handoff evidence)
-- [x] Acceptance Suite with criteria checks and KPI reporting
+- This project delivers a leaderless Track 3 swarm with deterministic task coordination and verifiable outputs.
+- Architecture uses orchestrator compatibility + decentralized agent-side plugin execution.
+- Transport backends support `simulated`, `mqtt`, and `official (Rust bridge path)`.
+- Core runtime includes plugin registry selection, timeout/retry, inflight backpressure, and task-state tracking.
+- Competition-ready path is MQTT: run `powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1`.
+- Success criterion is `acceptance_report.json` with all `criteria` fields equal to `true`.
 
-## Track 3 Requirement Summary
+## Architecture Overview
 
-- **Coordination correctness**: deterministic bidding/commit flow with single-winner and no-double-assignment guarantees.
-- **Resilience & recovery**: validated under delay/drop faults with partition recovery and hive-memory resynchronization.
-- **Auditability & verification**: reproducible event/commit/proof artifacts with independent offline proof verification.
-- **Security hardening**: signed message path, replay rejection, and commit equivocation guard.
-- **Developer clarity & observability**: one-command acceptance flow with criteria checks and KPI metrics in machine-readable reports.
+End-to-end flow:
 
-## Reviewer Quick Path
+1. Task enters through compatibility entry or SDK dispatch
+2. Coordination kernel routes and tracks task state (`pending/routed/running/success/failed`)
+3. Agent runtime selects plugin by task metadata and executes with timeout/retry/backpressure controls
+4. Results are committed, signed, and exported as verifiable artifacts
 
-If you only have a few minutes, run these in order:
+Core modules:
 
-1. `python -m security_monitor.track3.main --mode acceptance --foxmq-backend simulated`
-2. Open the generated `acceptance_report.json`
-3. Confirm criteria and scenario checks are all `true`
-4. For MQTT transport verification, run `Run All Track3 Cases (Including New Cases) With MQTT Environment` in the Run Guide.
+- `security_monitor/coordination/`: coordination kernel + decentralized `AgentPluginRuntime`
+- `security_monitor/plugins/`: plugin protocol, registry, and built-in business plugins
+- `security_monitor/adapters/`: centralized compatibility adapter + external SDK facade
+- `security_monitor/integration/`: transport adapter (`simulated`, `mqtt`, `official`)
+- `security_monitor/scenarios/`: executable business scenarios (risk control, cross-org alert, etc.)
+- `security_monitor/track3/`: submission entry (`main.py`) and acceptance orchestration
+- `security_monitor/tests/`: e2e and integration tests
 
-For pre-validated hardened evidence, start here:
+## Feature Coverage
 
-- MQTT: `artifacts/competition_req_check/acceptance_mqtt_10_hardened/acceptance_report.json`
-- Official bridge: `artifacts/competition_req_check/acceptance_official_10_hardened/acceptance_report.json`
+- **Coordination correctness**
+  - Single-winner task assignment
+  - No double assignment under contention
+- **Resilience**
+  - Delay/drop fault injection
+  - Recovery and state resynchronization
+- **Security**
+  - Signed envelopes
+  - Replay rejection
+  - Commit equivocation guard
+- **Auditability**
+  - Structured event logs
+  - Coordination proofs and commit logs
+  - Offline verification pipeline
+- **Pluginized business execution**
+  - Metadata-driven plugin selection
+  - Agent-side execution without replacing incumbent orchestrators
+- **Runtime controls**
+  - Async execution pool
+  - Inflight backpressure
+  - Plugin timeout + retry
+  - Runtime metrics
 
-## Directory Structure
-
-- `security_monitor/track3/`: Track 3 pure implementation + submission entrypoint (`protocol.py`, `main.py`)
-- `security_monitor/swarm/`: Track 3 shared swarm logic and compatibility entry (`demo_track3.py`)
-- `security_monitor/integration/`: transport and settlement integration (`foxmq_adapter.py`)
-- `security_monitor/roles/`: scout / guardian / verifier behaviors
-- `security_monitor/tests/`: e2e and acceptance-related tests
-
-## Run Guide
-
-Recommended review path: run `Acceptance (Simulated Transport)` first, then `Run All Track3 Cases With MQTT Environment`, and finally inspect `Artifact Outputs`.
+## Quick Start
 
 ### 1) Quick Demo
 
@@ -61,121 +71,57 @@ Recommended review path: run `Acceptance (Simulated Transport)` first, then `Run
 python -m security_monitor.track3.main
 ```
 
-### 2) Acceptance (Simulated Transport)
+### 2) Acceptance (Simulated Backend)
 
 ```bash
 python -m security_monitor.track3.main --mode acceptance --foxmq-backend simulated
 ```
 
-### 3) Acceptance (Official FoxMQ MQTT Endpoint)
+### 3) MQTT Acceptance (Recommended for Competition Runs)
 
-Script-first workflow (Windows):
-
-1. Full one-click path (download + start FoxMQ + run acceptance):
-   `powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1`
-2. Split path (keep FoxMQ running, then run tests in another terminal):
-   `powershell -ExecutionPolicy Bypass -File .\start_foxmq.ps1`
-3. With FoxMQ running, execute full MQTT unittest suite (see section `5.1` for exact commands).
-
-Manual startup fallback:
-
-Start FoxMQ with a reachable MQTT listener (for Windows loopback, bind explicitly to `127.0.0.1`):
+One-click:
 
 ```bash
-artifacts\foxmq_runtime\foxmq.exe run --secret-key-file=artifacts\foxmq_runtime\foxmq.d\key_0.pem --allow-anonymous-login --mqtt-addr=127.0.0.1:1883 --cluster-addr=127.0.0.1:19793
+powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1
 ```
 
-Then run acceptance against that endpoint:
+Manual (broker already running):
 
 ```bash
 python -m security_monitor.track3.main --mode acceptance --foxmq-backend mqtt --foxmq-mqtt-addr 127.0.0.1:1883
 ```
 
-### 4) Acceptance Against 4-Node Cluster (3N+1, N=1)
+## E2E and Full Case Execution
 
-Use four FoxMQ nodes with distinct ports:
-
-- Node0: MQTT `127.0.0.1:1883`, Cluster `127.0.0.1:19793`
-- Node1: MQTT `127.0.0.1:1884`, Cluster `127.0.0.1:19794`
-- Node2: MQTT `127.0.0.1:1885`, Cluster `127.0.0.1:19795`
-- Node3: MQTT `127.0.0.1:1886`, Cluster `127.0.0.1:19796`
-
-Run acceptance against any active node endpoint:
+### MQTT E2E (Single Test)
 
 ```bash
-python -m security_monitor.track3.main --mode acceptance --foxmq-backend mqtt --foxmq-mqtt-addr 127.0.0.1:1886
+$env:MQTT_E2E="1"; $env:FOXMQ_MQTT_ADDR="127.0.0.1:1884"; python -m unittest security_monitor.tests.test_swarm_track3.Track3SwarmTests.test_mqtt_transport_demo_e2e -v
 ```
 
-### 5) MQTT E2E Test
-
-```bash
-set MQTT_E2E=1
-set FOXMQ_MQTT_ADDR=127.0.0.1:1884
-python -m unittest security_monitor.tests.test_swarm_track3.Track3SwarmTests.test_mqtt_transport_demo_e2e
-```
-
-PowerShell equivalent:
-
-```bash
-$env:MQTT_E2E="1"; $env:FOXMQ_MQTT_ADDR="127.0.0.1:1884"; python -m unittest security_monitor.tests.test_swarm_track3.Track3SwarmTests.test_mqtt_transport_demo_e2e
-```
-
-### 5.1) Run All Track3 Cases (Including New Cases) With MQTT Environment
-
-Start broker in a dedicated terminal (recommended):
-
-```bash
-powershell -ExecutionPolicy Bypass -File .\start_foxmq.ps1
-```
-
-Manual equivalent:
-
-```bash
-artifacts\foxmq_runtime\foxmq.exe run --secret-key-file=artifacts\foxmq_runtime\foxmq.d\key_0.pem --allow-anonymous-login --mqtt-addr=127.0.0.1:1883 --cluster-addr=127.0.0.1:19793
-```
-
-Run full test suite with MQTT E2E enabled:
-
-```bash
-set MQTT_E2E=1
-set FOXMQ_MQTT_ADDR=127.0.0.1:1883
-set OFFICIAL_E2E=0
-set OFFICIAL_MULTI_E2E=0
-python -m unittest security_monitor.tests.test_swarm_track3 -v
-```
-
-PowerShell equivalent:
+### MQTT Full Track3 Cases
 
 ```bash
 $env:MQTT_E2E="1"; $env:FOXMQ_MQTT_ADDR="127.0.0.1:1883"; $env:OFFICIAL_E2E="0"; $env:OFFICIAL_MULTI_E2E="0"; python -m unittest security_monitor.tests.test_swarm_track3 -v
 ```
 
-Run acceptance scenarios under MQTT transport:
+### Official Bridge E2E (Optional Integration Path)
+
+`official` backend is not the same as MQTT and requires `vertex-rs-bridge` executable.
+
+Single-port:
 
 ```bash
-python -m security_monitor.track3.main --mode acceptance --foxmq-backend mqtt --foxmq-mqtt-addr 127.0.0.1:1883 --output-dir artifacts/acceptance_mqtt_latest
+$env:VERTEX_RS_BRIDGE_CMD="E:\tools\vertex\vertex-rs-bridge.exe --host 127.0.0.1 --port 1883 --stdio"; $env:OFFICIAL_E2E="1"; python -m unittest security_monitor.tests.test_swarm_track3.Track3SwarmTests.test_official_transport_demo_e2e -v
 ```
 
-### 6) Reinforced Acceptance (10+ Agents + Multi-hop + Multi-vendor)
+Multi-port:
 
 ```bash
-python -m security_monitor.track3.main --mode acceptance --workers 10 --foxmq-backend simulated --output-dir artifacts/competition_req_check/acceptance_simulated_10_reinforced
+$env:VERTEX_RS_BRIDGE_CMD_TEMPLATE="E:\tools\vertex\vertex-rs-bridge.exe --host {host} --port {port} --stdio"; $env:OFFICIAL_MULTI_E2E="1"; python -m unittest security_monitor.tests.test_swarm_track3.Track3SwarmTests.test_official_transport_multi_port_loopback_e2e -v
 ```
 
-Acceptance checks covered in `acceptance_report.json`:
-
-- `multi_vendor_readiness`
-- `route_negotiation_handoff`
-- `task_bidding`
-- `hive_memory_state_sync`
-- `verification_multisig_proof`
-- `byo_agents_orchestrator_replaced`
-- `security_attack_resistance`
-- `observability_kpi_ready`
-- `hive_memory_recovery`
-- `commit_equivocation_guard`
-
-## Artifact Outputs
+## Outputs and Evidence
 
 Acceptance mode writes:
 
@@ -184,14 +130,12 @@ Acceptance mode writes:
 - `artifacts/<run_name>/none|delay|drop/coordination_proof.json`
 - `artifacts/<run_name>/none|delay|drop/commit_log.json`
 
-Pass condition: all fields in `criteria` are `true` in `acceptance_report.json`.
+Pass condition:
 
-Latest validated evidence package:
+- All fields in `criteria` are `true` in `acceptance_report.json`
+
+Reference evidence:
 
 - MQTT hardened acceptance: `artifacts/competition_req_check/acceptance_mqtt_10_hardened/acceptance_report.json`
-- Official (Rust bridge) hardened acceptance: `artifacts/competition_req_check/acceptance_official_10_hardened/acceptance_report.json`
+- Official bridge acceptance: `artifacts/competition_req_check/acceptance_official_10_hardened/acceptance_report.json`
 - Simulated hardened baseline: `artifacts/competition_req_check/acceptance_simulated_10_hardened/acceptance_report.json`
-
-GitHub-friendly progress snapshot:
-
-- `evidence/progress_evidence.json`
