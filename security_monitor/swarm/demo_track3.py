@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, cast
 
 from security_monitor.integration.foxmq_adapter import FoxMQAdapter
 from security_monitor.integration.settlement_adapter import SettlementAdapter
+from security_monitor.roles import GuardianAgent, ScoutAgent, VerifierAgent
+from security_monitor.roles.guardian import LangChainStyleAdapter
 from security_monitor.swarm.agent_node import AgentNode, SwarmNetwork
 from security_monitor.swarm.fault_injector import FaultInjector
 from security_monitor.swarm.messages import (
@@ -23,8 +25,6 @@ from security_monitor.swarm.messages import (
     THREAT_REPORT,
 )
 from security_monitor.swarm.proof import build_hash_chain, build_proof, verify_proof_document
-from security_monitor.roles import ScoutAgent, GuardianAgent, VerifierAgent
-from security_monitor.roles.guardian import LangChainStyleAdapter
 
 
 class DemoSummary(TypedDict):
@@ -170,7 +170,7 @@ def run_demo(
     )
     
     planner, nodes = _create_agents(network, worker_count)
-    scout = cast(ScoutAgent, planner)
+    scout: ScoutAgent = planner
     scout_b = cast(ScoutAgent, next(node for node in nodes if node.agent_id == "agent-scout-b"))
 
     for node in nodes:
@@ -576,11 +576,12 @@ def run_acceptance(
     foxmq_mqtt_addr: Optional[str] = None,
 ) -> AcceptanceSummary:
     scenarios: Dict[str, DemoSummary] = {}
-    for mode in ("none", "delay", "drop"):
+    modes: tuple[Literal["none", "delay", "drop"], ...] = ("none", "delay", "drop")
+    for mode in modes:
         scenario_dir = os.path.join(output_dir, mode)
         scenarios[mode] = run_demo(
             output_dir=scenario_dir,
-            fault_mode=cast(Literal["none", "delay", "drop"], mode),
+            fault_mode=mode,
             worker_count=worker_count,
             foxmq_backend=foxmq_backend,
             vertex_rs_bridge_cmd=vertex_rs_bridge_cmd,

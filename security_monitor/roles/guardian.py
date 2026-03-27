@@ -1,11 +1,11 @@
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Any, Literal, Optional, Protocol
+from typing import Any, Dict, Literal, Optional, Protocol
 
-from security_monitor.swarm.agent_node import AgentNode
 from security_monitor.integration.settlement_adapter import SettlementAdapter
-from security_monitor.swarm.messages import EXEC_START, EXEC_DONE
+from security_monitor.swarm.agent_node import AgentNode
+from security_monitor.swarm.messages import EXEC_DONE, EXEC_START
 
 logger = logging.getLogger(__name__)
 

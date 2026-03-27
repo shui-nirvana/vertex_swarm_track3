@@ -9,12 +9,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from unittest import mock
 
 from security_monitor.integration.foxmq_adapter import FoxMQAdapter
-from security_monitor.track3.protocol import _create_agents, run_acceptance, run_demo
+from security_monitor.swarm.agent_node import SwarmNetwork
 from security_monitor.swarm.messages import COMMIT_VOTE, DISCOVER
 from security_monitor.swarm.negotiation import select_winner
 from security_monitor.swarm.proof import verify_proof_document
 from security_monitor.swarm.security import verify_payload
-from security_monitor.swarm.agent_node import SwarmNetwork
+from security_monitor.track3.protocol import _create_agents, run_acceptance, run_demo
 
 _OFFICIAL_E2E_BRIDGE_CMD = os.getenv("VERTEX_RS_BRIDGE_CMD", "").strip()
 _OFFICIAL_E2E_ENABLED = os.getenv("OFFICIAL_E2E", "0") == "1" and bool(_OFFICIAL_E2E_BRIDGE_CMD)

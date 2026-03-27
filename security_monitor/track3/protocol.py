@@ -161,7 +161,7 @@ def run_demo(
     )
 
     planner, nodes = _create_agents(network, worker_count)
-    scout = cast(ScoutAgent, planner)
+    scout: ScoutAgent = planner
     scout_b = cast(ScoutAgent, next(node for node in nodes if node.agent_id == "agent-scout-b"))
 
     for node in nodes:
@@ -556,11 +556,12 @@ def run_acceptance(
     foxmq_mqtt_addr: Optional[str] = None,
 ) -> AcceptanceSummary:
     scenarios: Dict[str, DemoSummary] = {}
-    for mode in ("none", "delay", "drop"):
+    modes: tuple[Literal["none", "delay", "drop"], ...] = ("none", "delay", "drop")
+    for mode in modes:
         scenario_dir = os.path.join(output_dir, mode)
         scenarios[mode] = run_demo(
             output_dir=scenario_dir,
-            fault_mode=cast(Literal["none", "delay", "drop"], mode),
+            fault_mode=mode,
             worker_count=worker_count,
             foxmq_backend=foxmq_backend,
             vertex_rs_bridge_cmd=vertex_rs_bridge_cmd,

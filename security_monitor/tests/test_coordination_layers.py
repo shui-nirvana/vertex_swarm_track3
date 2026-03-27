@@ -10,6 +10,7 @@ from security_monitor.adapters import (
     OrchestratorCompatibilityAdapter,
 )
 from security_monitor.coordination import CoordinationKernel
+from security_monitor.plugins import CrossOrgAlertPlugin
 from security_monitor.scenarios import (
     run_cross_org_alert_agent_driven_scenario,
     run_cross_org_alert_scenario,
@@ -17,7 +18,6 @@ from security_monitor.scenarios import (
     run_risk_control_scenario,
 )
 from security_monitor.transports import SimulatedTransport, build_transport
-from security_monitor.plugins import CrossOrgAlertPlugin
 
 
 class FlakyRetryPlugin:
@@ -73,7 +73,8 @@ class CoordinationLayerTests(unittest.TestCase):
         self.assertEqual(routed["target_agent"], "risk-agent")
         self.assertEqual(len(received), 1)
         state = kernel.get_task_state(routed["task_id"])
-        self.assertIsNotNone(state)
+        if state is None:
+            self.fail("task state should not be None")
         self.assertEqual(state["state"], "routed")
 
     def test_policy_hook_blocks_task(self) -> None:
@@ -100,6 +101,8 @@ class CoordinationLayerTests(unittest.TestCase):
         routed = compat.dispatch_task("alert_sync", {"alert_id": "a-1"}, metadata={"plugin": "cross_org_alert"})
         self.assertEqual(routed["status"], "routed")
         state = kernel.get_task_state(routed["task_id"])
+        if state is None:
+            self.fail("task state should not be None")
         self.assertEqual(state["state"], "routed")
         compat.sync_state("compat:last", routed["task_id"])
         self.assertEqual(compat.read_state("compat:last"), routed["task_id"])

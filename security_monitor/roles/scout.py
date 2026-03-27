@@ -1,9 +1,9 @@
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Any, Dict
 
-from security_monitor.swarm.agent_node import AgentNode
 from security_monitor.integration.ai_engine import AIRiskEngine
+from security_monitor.swarm.agent_node import AgentNode
 from security_monitor.swarm.messages import THREAT_GOSSIP
 
 logger = logging.getLogger(__name__)

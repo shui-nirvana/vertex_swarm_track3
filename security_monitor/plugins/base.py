@@ -1,10 +1,13 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Protocol
+from typing import Any, Dict, Protocol, Sequence
 
 
 class AgentBusinessPlugin(Protocol):
     plugin_name: str
-    supported_task_types: Iterable[str]
+
+    @property
+    def supported_task_types(self) -> Sequence[str]:
+        ...
 
     def supports(self, task_type: str, payload: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
         ...

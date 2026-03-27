@@ -1,5 +1,5 @@
-from typing import Any, Dict
 from time import sleep
+from typing import Any, Dict
 
 from security_monitor.adapters.centralized_compat import OrchestratorCompatibilityAdapter
 from security_monitor.coordination import AgentPluginRuntime, CoordinationKernel

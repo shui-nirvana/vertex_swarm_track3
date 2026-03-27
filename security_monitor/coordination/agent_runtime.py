@@ -1,4 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from threading import Lock, Semaphore
 from time import perf_counter
 from typing import Any, Dict, Iterable

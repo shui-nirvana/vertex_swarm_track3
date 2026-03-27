@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Any, Dict
 
 from security_monitor.swarm.agent_node import AgentNode
 from security_monitor.swarm.messages import VERIFY_ACK
