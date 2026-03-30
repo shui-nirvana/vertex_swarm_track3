@@ -8,12 +8,12 @@ from security_monitor.transports.base import BaseTransport, TransportCallback
 class FoxMQMqttTransport(BaseTransport):
     backend_name = "foxmq-mqtt"
 
-    def __init__(self, node_id: str, backend: str = "mqtt", bridge_cmd: str | None = None, mqtt_addr: str | None = None):
+    def __init__(self, node_id: str, backend: str = "mqtt", mqtt_addr: str | None = None):
         self.node_id = node_id
         self.backend = backend
-        self.bridge_cmd = bridge_cmd
         self.mqtt_addr = mqtt_addr
         self._adapter: FoxMQAdapter | None = None
+        self._network_topic = "swarm-control"
 
     def connect(self) -> None:
         if self._adapter is not None:
@@ -21,9 +21,9 @@ class FoxMQMqttTransport(BaseTransport):
         self._adapter = FoxMQAdapter(
             node_id=self.node_id,
             backend=self.backend,
-            bridge_cmd=self.bridge_cmd,
             mqtt_addr=self.mqtt_addr,
         )
+        self._adapter.join_network(self._network_topic)
 
     def publish(self, topic: str, payload: Dict[str, Any]) -> str:
         if self._adapter is None:
@@ -44,7 +44,19 @@ class FoxMQMqttTransport(BaseTransport):
     def close(self) -> None:
         if self._adapter is None:
             return
-        close_fn = getattr(self._adapter, "close", None)
-        if callable(close_fn):
-            close_fn()
+        self._adapter.close()
         self._adapter = None
+
+    def get_active_peers(self) -> list[str]:
+        if self._adapter is None:
+            self.connect()
+        assert self._adapter is not None
+        return list(self._adapter.get_active_peers())
+
+    def backend_info(self) -> Dict[str, Any]:
+        if self._adapter is None:
+            self.connect()
+        assert self._adapter is not None
+        info = dict(self._adapter.backend_info())
+        info["network_topic"] = self._network_topic
+        return info

@@ -1,26 +1,22 @@
-import hashlib
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from security_monitor.swarm.consensus import resolve_commit
 from security_monitor.swarm.execution import execute_task
 from security_monitor.swarm.fault_injector import FaultInjector
 from security_monitor.swarm.messages import (
     BID,
-    COMMIT_EQUIVOCATION,
-    COMMIT_VOTE,
     DISCOVER,
     EXEC_DONE,
     EXEC_START,
     HEARTBEAT,
     NODE_RESTART,
+    TASK_CLUSTER_FORMED,
     TASK_OFFER,
     THREAT_GOSSIP,
     VERIFY_ACK,
     EventRecord,
 )
-from security_monitor.swarm.negotiation import select_winner
 from security_monitor.swarm.security import ReplayProtector, sign_payload, verify_payload
 
 
@@ -36,13 +32,11 @@ class AgentNode:
     peers: Dict[str, float] = field(default_factory=dict)
     offers: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     bids_by_task: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
-    votes_by_task: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
-    commit_digest_by_task: Dict[str, str] = field(default_factory=dict)
-    equivocation_evidence_by_task: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     committed_winner_by_task: Dict[str, str] = field(default_factory=dict)
     executions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     verify_acks_by_task: Dict[str, Dict[str, str]] = field(default_factory=dict)
     threat_ledger: Dict[str, str] = field(default_factory=dict)  # Hive Memory: threat_id -> threat_details
+    task_clusters: Dict[str, List[str]] = field(default_factory=dict)
     replay: ReplayProtector = field(default_factory=ReplayProtector)
     _nonce: int = 0
 
@@ -104,60 +98,70 @@ class AgentNode:
         self.offers[task_id] = payload
         self._broadcast(TASK_OFFER, payload)
 
+    def form_task_cluster(
+        self,
+        task_id: str,
+        required_capabilities: Optional[List[str]] = None,
+        min_size: int = 3,
+    ) -> List[str]:
+        required = {str(cap).strip().lower() for cap in (required_capabilities or []) if str(cap).strip()}
+        candidates = [
+            node_id
+            for node_id in self.network.active_node_ids()
+            if node_id in self.network.nodes
+            and (not required or str(self.network.nodes[node_id].capability).strip().lower() in required)
+        ]
+        members = sorted(candidates)
+        if self.agent_id not in members and self.agent_id in self.network.nodes:
+            members = sorted(set(members) | {self.agent_id})
+        if len(members) > 0 and len(members) < max(1, int(min_size)):
+            extras = [node_id for node_id in sorted(self.network.active_node_ids()) if node_id not in members]
+            for node_id in extras:
+                members.append(node_id)
+                if len(members) >= max(1, int(min_size)):
+                    break
+        self.task_clusters[str(task_id)] = members
+        self._broadcast(
+            TASK_CLUSTER_FORMED,
+            {
+                "task_id": str(task_id),
+                "members": members,
+                "required_capabilities": sorted(required),
+            },
+        )
+        return members
+
     def _maybe_bid(self, offer: Dict[str, Any]) -> None:
         if self.is_planner:
+            return
+        constraints = dict(offer.get("constraints", {}))
+        required_quota = max(1, int(constraints.get("required_quota", 1)))
+        capacity = int(self.bid_profile.get("capacity", 1))
+        if capacity < required_quota:
+            return
+        estimated_cost = float(constraints.get("estimated_cost", self.bid_profile.get("price", 1.0)))
+        budget_limit = float(constraints.get("budget_limit", offer.get("budget_ceiling", 0.0)))
+        bid_price = max(float(self.bid_profile.get("price", 1.0)), estimated_cost)
+        if bid_price > budget_limit:
             return
         bid_payload = {
             "task_id": offer["task_id"],
             "agent_id": self.agent_id,
-            "price": float(self.bid_profile.get("price", 1.0)),
+            "price": bid_price,
             "eta_ms": int(self.bid_profile.get("eta_ms", 100)),
-            "capacity": int(self.bid_profile.get("capacity", 1)),
+            "capacity": capacity,
+            "required_quota": required_quota,
+            "estimated_cost": estimated_cost,
+            "budget_limit": budget_limit,
         }
         self._broadcast(BID, bid_payload)
 
-    def emit_commit_vote(self, task_id: str) -> None:
-        bids = self.bids_by_task.get(task_id, [])
-        winner_bid = select_winner(bids)
-        digest_source = f"{task_id}|{winner_bid['agent_id']}|{winner_bid['price']}|{winner_bid['eta_ms']}"
-        digest = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()
-        self.commit_digest_by_task[task_id] = digest
-        self._broadcast(
-            COMMIT_VOTE,
-            {
-                "task_id": task_id,
-                "voter": self.agent_id,
-                "winner": winner_bid["agent_id"],
-                "digest": digest,
-            },
-        )
-
-    def _record_equivocation(self, payload: Dict[str, Any], reason: str, ts: float) -> None:
-        task_id = str(payload.get("task_id", ""))
-        evidence = {
-            "task_id": task_id,
-            "voter": str(payload.get("voter", "")),
-            "winner": str(payload.get("winner", "")),
-            "digest": str(payload.get("digest", "")),
-            "reason": reason,
-        }
-        bucket = self.equivocation_evidence_by_task.setdefault(task_id, [])
-        bucket.append(evidence)
-        self.network.events.append(
-            EventRecord(
-                ts=ts,
-                actor=self.agent_id,
-                event_type=COMMIT_EQUIVOCATION,
-                payload=evidence,
-            )
-        )
-
-    def resolve_commit(self, task_id: str, total_nodes: int) -> Optional[str]:
-        votes = self.votes_by_task.get(task_id, [])
-        winner = resolve_commit(votes=votes, total_nodes=total_nodes)
-        if winner:
-            self.committed_winner_by_task[task_id] = winner
-        return winner
+    def assign_task_winner(self, task_id: str, winner_agent_id: str) -> None:
+        task_key = str(task_id).strip()
+        winner = str(winner_agent_id).strip()
+        if not task_key or not winner:
+            return
+        self.committed_winner_by_task[task_key] = winner
 
     def execute_committed_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         winner = self.committed_winner_by_task.get(task_id)
@@ -248,26 +252,6 @@ class AgentNode:
             if str(payload["agent_id"]) not in existing:
                 bids.append(payload)
             return
-        if message_type == COMMIT_VOTE:
-            task_id = str(payload["task_id"])
-            votes = self.votes_by_task.setdefault(task_id, [])
-            voter = str(payload["voter"])
-            digest = str(payload["digest"])
-            winner = str(payload["winner"])
-            task_digest = self.commit_digest_by_task.get(task_id)
-            if task_digest is None:
-                self.commit_digest_by_task[task_id] = digest
-            elif task_digest != digest:
-                self._record_equivocation(payload=payload, reason="task_digest_mismatch", ts=ts)
-                return
-            for existing_vote in votes:
-                if str(existing_vote["voter"]) != voter:
-                    continue
-                if str(existing_vote["digest"]) != digest or str(existing_vote["winner"]) != winner:
-                    self._record_equivocation(payload=payload, reason="voter_equivocation", ts=ts)
-                return
-            votes.append(payload)
-            return
         if message_type == EXEC_DONE:
             task_id = str(payload["task_id"])
             self.executions[task_id] = payload
@@ -282,6 +266,12 @@ class AgentNode:
             threat_id = str(payload["threat_id"])
             details = str(payload["details"])
             self.threat_ledger[threat_id] = details
+            return
+        if message_type == TASK_CLUSTER_FORMED:
+            task_id = str(payload.get("task_id", ""))
+            members = [str(member) for member in list(payload.get("members", []))]
+            if task_id:
+                self.task_clusters[task_id] = members
             return
 
 
@@ -318,13 +308,11 @@ class SwarmNetwork:
         node.peers.clear()
         node.offers.clear()
         node.bids_by_task.clear()
-        node.votes_by_task.clear()
-        node.commit_digest_by_task.clear()
-        node.equivocation_evidence_by_task.clear()
         node.committed_winner_by_task.clear()
         node.executions.clear()
         node.verify_acks_by_task.clear()
         node.threat_ledger.clear()
+        node.task_clusters.clear()
         node.replay = ReplayProtector()
         self.events.append(
             EventRecord(

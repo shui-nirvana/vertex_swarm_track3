@@ -16,7 +16,7 @@ def _wait_for_terminal_state(kernel: CoordinationKernel, task_id: str, rounds: i
     return kernel.get_task_state(task_id)
 
 
-def run_risk_control_scenario(backend: str = "simulated") -> Dict[str, Any]:
+def run_risk_control_scenario(backend: str = "mqtt") -> Dict[str, Any]:
     transport = build_transport(node_id="risk-kernel", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     kernel.register_agent("risk-sentinel", ["risk_assessment"])
@@ -35,7 +35,7 @@ def run_risk_control_scenario(backend: str = "simulated") -> Dict[str, Any]:
     }
 
 
-def run_risk_control_agent_driven_scenario(backend: str = "simulated") -> Dict[str, Any]:
+def run_risk_control_agent_driven_scenario(backend: str = "mqtt") -> Dict[str, Any]:
     transport = build_transport(node_id="risk-kernel-agent-driven", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     runtime = AgentPluginRuntime(
@@ -44,16 +44,19 @@ def run_risk_control_agent_driven_scenario(backend: str = "simulated") -> Dict[s
         plugins=[RiskControlPlugin()],
     )
     runtime.start()
-    compat = OrchestratorCompatibilityAdapter(kernel)
-    dispatched = compat.dispatch_task(
-        task_type="risk_assessment",
-        payload={"org_id": "org-a", "asset": "vault-42", "signal": "abnormal-withdraw"},
-        source_agent="legacy-orchestrator",
-        metadata={"plugin": "risk_control"},
-    )
-    task_state = _wait_for_terminal_state(kernel, dispatched["task_id"])
-    return {
-        "scenario": "risk_control_agent_driven",
-        "dispatch": dispatched,
-        "task_state": task_state,
-    }
+    try:
+        compat = OrchestratorCompatibilityAdapter(kernel)
+        dispatched = compat.dispatch_task(
+            task_type="risk_assessment",
+            payload={"org_id": "org-a", "asset": "vault-42", "signal": "abnormal-withdraw"},
+            source_agent="legacy-orchestrator",
+            metadata={"plugin": "risk_control"},
+        )
+        task_state = _wait_for_terminal_state(kernel, dispatched["task_id"])
+        return {
+            "scenario": "risk_control_agent_driven",
+            "dispatch": dispatched,
+            "task_state": task_state,
+        }
+    finally:
+        runtime.stop()

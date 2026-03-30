@@ -10,12 +10,19 @@ PolicyHook = Callable[[CoordinationTask], Tuple[bool, str]]
 
 
 class CoordinationKernel:
-    def __init__(self, transport: BaseTransport, policy_hooks: List[PolicyHook] | None = None):
+    def __init__(
+        self,
+        transport: BaseTransport,
+        policy_hooks: List[PolicyHook] | None = None,
+        topic_root: str = "coordination",
+    ):
         self.transport = transport
         self.policy_hooks = list(policy_hooks or [])
         self.state_store: Dict[str, Any] = {}
         self.task_states: Dict[str, Dict[str, Any]] = {}
         self.agent_capabilities: Dict[str, set[str]] = defaultdict(set)
+        normalized_topic_root = str(topic_root).strip().strip("/")
+        self.topic_root = normalized_topic_root or "coordination"
         self.started = False
 
     def start(self) -> None:
@@ -49,6 +56,16 @@ class CoordinationKernel:
             self.start()
         return self.transport.publish(topic, payload)
 
+    def active_peers(self) -> list[str]:
+        if not self.started:
+            self.start()
+        return list(self.transport.get_active_peers())
+
+    def transport_info(self) -> Dict[str, Any]:
+        if not self.started:
+            self.start()
+        return dict(self.transport.backend_info())
+
     def submit_task(
         self,
         task_type: str,
@@ -68,6 +85,42 @@ class CoordinationKernel:
         self._set_task_state(task.task_id, TaskState.PENDING, {"created_at": task.created_at.isoformat()})
         return self.route_task(task)
 
+    def task_topic(self, agent_id: str) -> str:
+        return f"{self.topic_root}/tasks/{str(agent_id).strip()}"
+
+    def result_topic(self, task_id: str) -> str:
+        return f"{self.topic_root}/results/{str(task_id).strip()}"
+
+    def result_stream_topic(self) -> str:
+        return f"{self.topic_root}/results"
+
+    def result_wildcard_topic(self) -> str:
+        return f"{self.topic_root}/results/+"
+
+    def response_topic(self, agent_id: str) -> str:
+        return f"{self.topic_root}/responses/{str(agent_id).strip()}"
+
+    def agent_announcement_topic(self) -> str:
+        return f"{self.topic_root}/agents/announcements"
+
+    def agent_heartbeat_topic(self) -> str:
+        return f"{self.topic_root}/agents/heartbeats"
+
+    def role_intent_topic(self, role: str) -> str:
+        return f"{self.topic_root}/roles/{str(role).strip().lower()}/intent"
+
+    def role_claim_topic(self, role: str) -> str:
+        return f"{self.topic_root}/roles/{str(role).strip().lower()}/claim"
+
+    def mission_start_topic(self) -> str:
+        return f"{self.topic_root}/missions/start"
+
+    def mission_stage_topic(self) -> str:
+        return f"{self.topic_root}/missions/stage"
+
+    def mission_complete_topic(self) -> str:
+        return f"{self.topic_root}/missions/complete"
+
     def route_task(self, task: CoordinationTask) -> Dict[str, Any]:
         allowed, reason = self._evaluate_policy(task)
         if not allowed:
@@ -79,7 +132,7 @@ class CoordinationKernel:
             self._set_task_state(task.task_id, TaskState.FAILED, {"reason": "No agent route available"})
             return {"status": "error", "task_id": task.task_id, "reason": "No agent route available"}
 
-        topic = f"coordination/tasks/{target_agent}"
+        topic = self.task_topic(target_agent)
         event_payload = {
             "task_id": task.task_id,
             "task_type": task.task_type,
@@ -92,7 +145,14 @@ class CoordinationKernel:
         self._set_task_state(
             task.task_id,
             TaskState.ROUTED,
-            {"target_agent": target_agent, "topic": topic, "routed_at": datetime.now(timezone.utc).isoformat()},
+            {
+                "task_type": task.task_type,
+                "source_agent": task.source_agent,
+                "target_agent": target_agent,
+                "metadata": dict(task.metadata),
+                "topic": topic,
+                "routed_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
         self.publish(topic, event_payload)
         return {"status": "routed", "task_id": task.task_id, "target_agent": target_agent, "topic": topic}
@@ -107,6 +167,17 @@ class CoordinationKernel:
             state,
             {"result": dict(result), "completed_at": datetime.now(timezone.utc).isoformat()},
         )
+        snapshot = self.get_task_state(task_id) or {"task_id": task_id, "state": state.value, "result": dict(result)}
+        self.publish(self.result_topic(task_id), snapshot)
+        self.publish(self.result_stream_topic(), snapshot)
+        metadata = dict(snapshot.get("metadata", {}))
+        response_topic = str(metadata.get("__response_topic", "") or metadata.get("response_topic", "")).strip()
+        if response_topic:
+            response_payload = dict(snapshot)
+            correlation_data = metadata.get("__correlation_data")
+            if correlation_data is not None:
+                response_payload["__correlation_data"] = correlation_data
+            self.publish(response_topic, response_payload)
 
     def get_task_state(self, task_id: str) -> Dict[str, Any] | None:
         state = self.task_states.get(task_id)

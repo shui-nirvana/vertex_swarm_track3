@@ -48,7 +48,7 @@ class AgentPluginRuntime:
             }
         )
         self.kernel.register_agent(self.agent_id, capabilities)
-        self.kernel.subscribe(f"coordination/tasks/{self.agent_id}", self._handle_task)
+        self.kernel.subscribe(self.kernel.task_topic(self.agent_id), self._handle_task)
 
     def _handle_task(self, message: Dict[str, Any]) -> None:
         if not self.inflight_semaphore.acquire(blocking=False):

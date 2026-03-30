@@ -22,3 +22,9 @@ class BaseTransport(ABC):
     @abstractmethod
     def close(self) -> None:
         raise NotImplementedError
+
+    def get_active_peers(self) -> list[str]:
+        return []
+
+    def backend_info(self) -> Dict[str, Any]:
+        return {"backend": self.backend_name}

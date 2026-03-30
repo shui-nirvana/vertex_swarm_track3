@@ -1,33 +1,82 @@
+import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Literal
 from unittest import mock
 
 from security_monitor.integration.foxmq_adapter import FoxMQAdapter
 from security_monitor.swarm.agent_node import SwarmNetwork
-from security_monitor.swarm.messages import COMMIT_VOTE, DISCOVER
-from security_monitor.swarm.negotiation import select_winner
-from security_monitor.swarm.proof import verify_proof_document
+from security_monitor.swarm.messages import DISCOVER
 from security_monitor.swarm.security import verify_payload
-from security_monitor.track3.protocol import _create_agents, run_acceptance, run_demo
+from security_monitor.swarm.vertex_consensus import VertexConsensus
+from security_monitor.track3.protocol import (
+    AcceptanceSummary,
+    DemoSummary,
+    _create_agents,
+    _vertex_finalize_winner,
+    run_acceptance,
+    run_demo,
+)
 
-_OFFICIAL_E2E_BRIDGE_CMD = os.getenv("VERTEX_RS_BRIDGE_CMD", "").strip()
-_OFFICIAL_E2E_ENABLED = os.getenv("OFFICIAL_E2E", "0") == "1" and bool(_OFFICIAL_E2E_BRIDGE_CMD)
-_OFFICIAL_MULTI_E2E_TEMPLATE = os.getenv("VERTEX_RS_BRIDGE_CMD_TEMPLATE", "").strip()
-_OFFICIAL_MULTI_E2E_ENABLED = os.getenv("OFFICIAL_MULTI_E2E", "0") == "1" and bool(_OFFICIAL_MULTI_E2E_TEMPLATE)
-_MQTT_E2E_ADDR = os.getenv("FOXMQ_MQTT_ADDR", "").strip()
-_MQTT_E2E_ENABLED = os.getenv("MQTT_E2E", "0") == "1" and bool(_MQTT_E2E_ADDR)
+_MQTT_E2E_ADDR = os.getenv("FOXMQ_MQTT_ADDR", "127.0.0.1:1883").strip()
+_MQTT_E2E_ENABLED = bool(_MQTT_E2E_ADDR)
+_MULTIPROCESS_E2E_ENABLED = bool(_MQTT_E2E_ADDR)
+_MULTIPROCESS_RECOVERY_E2E_ENABLED = bool(_MQTT_E2E_ADDR)
+_TRACK3_TEST_MQTT_ADDR = _MQTT_E2E_ADDR
 
 
 class Track3SwarmTests(unittest.TestCase):
+    def _mqtt_endpoint_reachable(self) -> bool:
+        host, _, port_raw = _TRACK3_TEST_MQTT_ADDR.rpartition(":")
+        if not host or not port_raw:
+            return False
+        try:
+            port = int(port_raw)
+        except ValueError:
+            return False
+        with socket.socket() as sock:
+            sock.settimeout(1.0)
+            return sock.connect_ex((host, port)) == 0
+
+    def _require_mqtt_e2e(self) -> None:
+        self.assertTrue(_MQTT_E2E_ENABLED, msg="FOXMQ_MQTT_ADDR is required for FoxMQ clustered mode tests")
+        self.assertTrue(
+            self._mqtt_endpoint_reachable(),
+            msg=f"FoxMQ MQTT endpoint is not reachable at {_TRACK3_TEST_MQTT_ADDR}",
+        )
+
+    def _run_demo_mqtt(
+        self,
+        output_dir: str,
+        fault_mode: Literal["none", "delay", "drop"],
+        worker_count: int = 2,
+    ) -> DemoSummary:
+        self._require_mqtt_e2e()
+        return run_demo(
+            output_dir=output_dir,
+            fault_mode=fault_mode,
+            worker_count=worker_count,
+            foxmq_backend="mqtt",
+            foxmq_mqtt_addr=_TRACK3_TEST_MQTT_ADDR,
+        )
+
+    def _run_acceptance_mqtt(self, output_dir: str) -> AcceptanceSummary:
+        self._require_mqtt_e2e()
+        return run_acceptance(
+            output_dir=output_dir,
+            foxmq_backend="mqtt",
+            foxmq_mqtt_addr=_TRACK3_TEST_MQTT_ADDR,
+        )
+
     def test_full_loop_without_fault(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="none", foxmq_backend="simulated")
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="none")
             self.assertEqual(summary["winner"], "agent-worker-0")
             self.assertEqual(summary["signer_count"], len(summary["active_nodes"]))
             self.assertGreater(summary["event_count"], 0)
@@ -58,49 +107,76 @@ class Track3SwarmTests(unittest.TestCase):
 
     def test_loop_with_node_drop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="drop", foxmq_backend="simulated")
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="drop")
             self.assertEqual(summary["winner"], "agent-worker-1")
             self.assertEqual(summary["signer_count"], len(summary["active_nodes"]))
 
-    def test_proof_has_hash_chain(self) -> None:
+    def test_proof_uses_vertex_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="delay", foxmq_backend="simulated")
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="delay")
             with open(summary["proof_path"], "r", encoding="utf-8") as f:
                 proof = json.load(f)
-            self.assertIn("final_chain_hash", proof)
-            self.assertIn("chain", proof)
-            self.assertEqual(proof["event_count"], len(proof["chain"]))
-            if proof["chain"]:
-                self.assertEqual(proof["final_chain_hash"], proof["chain"][-1]["chain_hash"])
+            payload = dict(proof.get("proof_payload", {}))
+            self.assertTrue(str(proof.get("proof_hash", "")).strip())
+            self.assertIn("ordered_event_ids", payload)
+            self.assertGreaterEqual(len(list(payload.get("ordered_event_ids", []))), 1)
 
-    def test_proof_anchor_and_offline_verification(self) -> None:
+    def test_vertex_proof_and_offline_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="none", foxmq_backend="simulated")
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="none")
             with open(summary["proof_path"], "r", encoding="utf-8") as f:
                 proof = json.load(f)
-            verification = verify_proof_document(proof)
+            participants = [
+                str(item).strip()
+                for item in dict(proof.get("proof_payload", {})).get("participants", [])
+                if str(item).strip()
+            ]
+            participant_secrets = {agent_id: f"secret-{agent_id.split('agent-')[-1]}" for agent_id in participants}
+            verification = VertexConsensus.verify_proof(proof, participant_secrets)
             self.assertTrue(all(verification.values()))
-            self.assertIn("anchor", proof)
-            self.assertIn("anchor_id", proof["anchor"])
+            self.assertIn("signatures", proof)
+            self.assertIn("proof_payload", proof)
 
-    def test_proof_verification_fails_after_tampering(self) -> None:
+    def test_vertex_proof_verification_fails_after_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="none", foxmq_backend="simulated")
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="none")
             with open(summary["proof_path"], "r", encoding="utf-8") as f:
                 proof = json.load(f)
-            if proof["chain"]:
-                proof["chain"][0]["event"]["payload"]["task_id"] = "tampered-task"
-            verification = verify_proof_document(proof)
-            self.assertFalse(verification["chain_integrity_ok"])
+            participants = [
+                str(item).strip()
+                for item in dict(proof.get("proof_payload", {})).get("participants", [])
+                if str(item).strip()
+            ]
+            participant_secrets = {agent_id: f"secret-{agent_id.split('agent-')[-1]}" for agent_id in participants}
+            proof["proof_hash"] = "tampered-proof-hash"
+            verification = VertexConsensus.verify_proof(proof, participant_secrets)
+            self.assertFalse(bool(verification.get("proof_hash_ok")))
 
-    def test_deterministic_winner_tie_break_by_agent_id(self) -> None:
+    def test_vertex_consensus_winner_is_deterministic_for_same_bids(self) -> None:
+        network = SwarmNetwork()
+        _, nodes = _create_agents(network)
+        active_members = [node.agent_id for node in nodes if node.agent_id != "agent-worker-1"]
         bids = [
-            {"agent_id": "agent-z", "price": 5.0, "eta_ms": 100},
-            {"agent_id": "agent-a", "price": 5.0, "eta_ms": 100},
-            {"agent_id": "agent-m", "price": 5.0, "eta_ms": 100},
+            {"task_id": "task-tie", "agent_id": "agent-worker-0", "price": 5.0, "eta_ms": 100, "capacity": 1},
+            {"task_id": "task-tie", "agent_id": "agent-verifier", "price": 5.0, "eta_ms": 100, "capacity": 1},
+            {"task_id": "task-tie", "agent_id": "agent-scout", "price": 5.0, "eta_ms": 100, "capacity": 1},
         ]
-        winner = select_winner(bids)
-        self.assertEqual(winner["agent_id"], "agent-a")
+        winner_a, _, proof_a, checks_a = _vertex_finalize_winner(
+            network=network,
+            task_id="task-tie",
+            active_members=active_members,
+            bids=bids,
+        )
+        winner_b, _, proof_b, checks_b = _vertex_finalize_winner(
+            network=network,
+            task_id="task-tie",
+            active_members=active_members,
+            bids=bids,
+        )
+        self.assertEqual(winner_a, winner_b)
+        self.assertTrue(all(checks_a.values()))
+        self.assertTrue(all(checks_b.values()))
+        self.assertEqual(proof_a["proof_hash"], proof_b["proof_hash"])
 
     def test_replay_message_is_rejected(self) -> None:
         network = SwarmNetwork()
@@ -122,46 +198,283 @@ class Track3SwarmTests(unittest.TestCase):
         second_seen = planner.peers.get(worker.agent_id)
         self.assertEqual(first_seen, second_seen)
 
+    def test_basic_ai_agent_can_build_and_publish_business_request(self) -> None:
+        network = SwarmNetwork()
+        planner, _ = _create_agents(network)
+        request = planner.create_business_request(
+            task_id="task-basic-001",
+            target_address="0x1234567890abcdef1234567890abcdef12345678",
+            amount=100.0,
+            latency_ms_max=350,
+            resource_units=1,
+        )
+        published = planner.propose_business_task(request)
+        self.assertTrue(request["accepted"])
+        self.assertTrue(published)
+        self.assertEqual(request["task_id"], "task-basic-001")
+        self.assertEqual(request["constraints"]["latency_ms_max"], 350)
+        self.assertEqual(request["constraints"]["resource_units"], 1)
+        bids = planner.bids_by_task.get("task-basic-001", [])
+        self.assertGreaterEqual(len(bids), 1)
+
+    def test_basic_ai_agent_rejects_malicious_target_request(self) -> None:
+        network = SwarmNetwork()
+        planner, _ = _create_agents(network)
+        request = planner.create_business_request(
+            task_id="task-basic-002",
+            target_address="0x6666666666666666666666666666666666666666",
+            amount=100.0,
+        )
+        published = planner.propose_business_task(request)
+        self.assertFalse(request["accepted"])
+        self.assertFalse(published)
+        self.assertNotIn("task-basic-002", planner.offers)
+        self.assertIn("0x6666666666666666666666666666666666666666", planner.threat_ledger)
+
+    def test_leaderless_pricing_and_resource_limits_gate_bids(self) -> None:
+        network = SwarmNetwork()
+        planner, nodes = _create_agents(network)
+        worker0 = next(node for node in nodes if node.agent_id == "agent-worker-0")
+        worker1 = next(node for node in nodes if node.agent_id == "agent-worker-1")
+        worker0.bid_profile["capacity"] = 1
+        worker1.bid_profile["capacity"] = 1
+
+        blocked = planner.create_business_request(
+            task_id="task-basic-003",
+            target_address="0x1234567890abcdef1234567890abcdef12345678",
+            amount=100.0,
+            resource_units=2,
+        )
+        self.assertTrue(planner.propose_business_task(blocked))
+        self.assertEqual(planner.bids_by_task.get("task-basic-003", []), [])
+
+        budget_blocked = planner.create_business_request(
+            task_id="task-basic-004",
+            target_address="0x1234567890abcdef1234567890abcdef12345678",
+            amount=100.0,
+            resource_units=1,
+        )
+        budget_blocked["constraints"]["estimated_cost"] = 9.0
+        budget_blocked["constraints"]["budget_limit"] = 8.0
+        budget_blocked["budget_ceiling"] = 8.0
+        self.assertTrue(planner.propose_business_task(budget_blocked))
+        self.assertEqual(planner.bids_by_task.get("task-basic-004", []), [])
+
+        accepted = planner.create_business_request(
+            task_id="task-basic-005",
+            target_address="0x1234567890abcdef1234567890abcdef12345678",
+            amount=100.0,
+            resource_units=1,
+        )
+        accepted["constraints"]["estimated_cost"] = 7.0
+        accepted["constraints"]["budget_limit"] = 9.0
+        accepted["budget_ceiling"] = 9.0
+        self.assertTrue(planner.propose_business_task(accepted))
+        bids = planner.bids_by_task.get("task-basic-005", [])
+        self.assertGreaterEqual(len(bids), 1)
+        self.assertTrue(all(float(bid["price"]) >= 7.0 for bid in bids))
+
+    def test_minimum_three_agent_cycle_without_central_orchestrator(self) -> None:
+        network = SwarmNetwork()
+        planner, nodes = _create_agents(network)
+        for node in nodes:
+            node.discover()
+            node.heartbeat()
+
+        cluster_members = planner.form_task_cluster(
+            task_id="task-basic-006",
+            required_capabilities=["scout", "guardian", "verifier"],
+            min_size=3,
+        )
+        active_cluster = [node_id for node_id in cluster_members if node_id in network.active_node_ids()]
+        self.assertGreaterEqual(len(active_cluster), 3)
+
+        request = planner.create_business_request(
+            task_id="task-basic-006",
+            target_address="0x1234567890abcdef1234567890abcdef12345678",
+            amount=100.0,
+            resource_units=1,
+        )
+        self.assertTrue(planner.propose_business_task(request))
+
+        winner, _, _, checks = _vertex_finalize_winner(
+            network=network,
+            task_id="task-basic-006",
+            active_members=active_cluster,
+            bids=list(planner.bids_by_task.get("task-basic-006", [])),
+        )
+        self.assertTrue(all(checks.values()))
+        for node_id in active_cluster:
+            network.nodes[node_id].assign_task_winner("task-basic-006", winner)
+        execution = network.nodes[winner].execute_committed_task("task-basic-006")
+        self.assertIsNotNone(execution)
+
+        event_hash = "vertex-proof-task-basic-006"
+        for node_id in active_cluster:
+            network.nodes[node_id].emit_verify_ack("task-basic-006", event_hash)
+        signatures = planner.verify_acks_by_task.get("task-basic-006", {})
+        self.assertGreaterEqual(len(signatures), 3)
+        self.assertTrue(all(float(event.ts) > 0.0 for event in network.events))
+        self.assertTrue(all(str(event.actor) for event in network.events))
+
+    @unittest.skipUnless(
+        _MULTIPROCESS_E2E_ENABLED,
+        "set MULTIPROCESS_E2E=1 and FOXMQ_MQTT_ADDR to run multiprocess mqtt e2e",
+    )
+    def test_single_machine_ad_hoc_swarm_full_negotiate_commit_execute_verify_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._run_multiprocess_cluster_mission(
+                output_dir=os.path.join(tmp, "cluster-full-loop"),
+                run_id_prefix="cluster-full-loop",
+                agent_specs=[
+                    ("agent-scout-only", "scout"),
+                    ("agent-guardian-only", "guardian"),
+                    ("agent-verifier-only", "verifier"),
+                ],
+            )
+            self._assert_cluster_competition_requirements(report)
+            steps = list(report.get("steps", []))
+            self.assertEqual(len(steps), 3)
+            self.assertTrue(all(str(step.get("state", "")).strip().lower() == "success" for step in steps))
+            proof_checks = dict(report.get("proof_checks", {}))
+            self.assertTrue(proof_checks)
+            self.assertTrue(all(bool(value) for value in proof_checks.values()))
+
+    @unittest.skipUnless(
+        _MULTIPROCESS_E2E_ENABLED,
+        "set MULTIPROCESS_E2E=1 and FOXMQ_MQTT_ADDR to run multiprocess mqtt e2e",
+    )
+    def test_single_machine_cluster_coordination_correctness_auditability_and_observability_e2e(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._run_multiprocess_cluster_mission(
+                output_dir=os.path.join(tmp, "cluster-correctness-auditability"),
+                run_id_prefix="cluster-correctness-auditability",
+                agent_specs=[
+                    ("agent-alpha", "scout,guardian,verifier"),
+                    ("agent-beta", "scout,guardian,verifier"),
+                    ("agent-gamma", "scout,guardian,verifier"),
+                ],
+            )
+            self.assertTrue(bool(report.get("all_success")))
+            mission_id = str(report.get("mission_id", "")).strip()
+            self.assertTrue(mission_id)
+            role_assignments = dict(report.get("role_identity_assignments", {}))
+            announcements = [str(item.get("agent_id", "")).strip() for item in report.get("agent_announcements", []) if str(item.get("agent_id", "")).strip()]
+            self.assertGreaterEqual(len(announcements), 3)
+            for role_name in ("scout", "guardian", "verifier"):
+                self.assertIn(role_name, role_assignments)
+                actual_assignee = str(dict(role_assignments.get(role_name, {})).get("assigned_agent", "")).strip()
+                self.assertTrue(actual_assignee)
+                claim_id = f"{mission_id}:{role_name}:1"
+                scored_candidates: list[tuple[str, float, float]] = []
+                for agent_id in sorted(set(announcements)):
+                    salt = f"identity:{agent_id}:{claim_id}:{role_name}".encode("utf-8")
+                    tie_break = int(hashlib.sha1(salt).hexdigest()[:6], 16) / float(0xFFFFFF)
+                    score = round(1000.0 + tie_break, 6)
+                    scored_candidates.append((agent_id, score, 0.0))
+                scored_candidates.sort(key=lambda item: (-float(item[1]), float(item[2]), str(item[0])))
+                expected_assignee = scored_candidates[0][0]
+                self.assertEqual(actual_assignee, expected_assignee)
+            steps = list(report.get("steps", []))
+            self.assertEqual(len(steps), 3)
+            task_ids = [str(step.get("task_id", "")).strip() for step in steps]
+            self.assertEqual(len(task_ids), len(set(task_ids)))
+            self.assertTrue(all(task_ids))
+            proof = dict(report.get("coordination_proof", {}))
+            self.assertTrue(str(proof.get("proof_hash", "")).strip())
+            payload = dict(proof.get("proof_payload", {}))
+            self.assertGreaterEqual(len(list(payload.get("ordered_event_ids", []))), 1)
+            proof_checks = dict(report.get("proof_checks", {}))
+            self.assertTrue(all(bool(value) for value in proof_checks.values()))
+            tampered_proof = json.loads(json.dumps(proof))
+            tampered_proof["proof_hash"] = "tampered-multiprocess-proof-hash"
+            committee_agents = [
+                str(item).strip()
+                for item in dict(tampered_proof.get("proof_payload", {})).get("participants", [])
+                if str(item).strip()
+            ]
+            committee_secrets = {agent_id: f"secret-{agent_id.split('agent-')[-1]}" for agent_id in committee_agents}
+            tampered_checks = VertexConsensus.verify_proof(tampered_proof, committee_secrets)
+            self.assertFalse(bool(tampered_checks.get("proof_hash_ok")))
+            standard_metrics = dict(report.get("standard_metrics", {}))
+            self.assertIn("success_rate", standard_metrics)
+            self.assertIn("end_to_end_latency_ms", standard_metrics)
+            self.assertIn("retry_count", standard_metrics)
+            self.assertIn("timeout_count", standard_metrics)
+
+    @unittest.skipUnless(
+        _MULTIPROCESS_RECOVERY_E2E_ENABLED,
+        "set MULTIPROCESS_RECOVERY_E2E=1 and FOXMQ_MQTT_ADDR to run multiprocess recovery e2e",
+    )
+    def test_single_machine_cluster_resilience_with_delay_and_drop_e2e(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._run_multiprocess_cluster_mission(
+                output_dir=os.path.join(tmp, "cluster-resilience"),
+                run_id_prefix="cluster-resilience",
+                agent_specs=[
+                    ("agent-scout", "scout,guardian,verifier"),
+                    ("agent-guardian", "scout,guardian,verifier"),
+                    ("agent-verifier", "scout,guardian,verifier"),
+                ],
+                pre_guardian_delay_seconds=3.0,
+                terminate_agent_id="agent-guardian",
+                ready_timeout_seconds=30.0,
+            )
+            self.assertTrue(bool(report.get("all_success")))
+            steps = list(report.get("steps", []))
+            self.assertGreaterEqual(len(steps), 3)
+            guardian_steps = [step for step in steps if str(step.get("role_name", "")).strip().lower() == "guardian"]
+            self.assertGreaterEqual(len(guardian_steps), 1)
+            selected_guardians = {str(step.get("selected_agent", "")).strip() for step in guardian_steps}
+            self.assertNotIn("agent-guardian", selected_guardians)
+            proof_checks = dict(report.get("proof_checks", {}))
+            self.assertTrue(all(bool(value) for value in proof_checks.values()))
+
     def test_no_double_assignment_in_event_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="none", foxmq_backend="simulated")
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="none")
             with open(summary["event_log_path"], "r", encoding="utf-8") as f:
                 events = json.load(f)
             exec_done = [event for event in events if event["event_type"] == "EXEC_DONE"]
             self.assertEqual(len(exec_done), 1)
 
-    def test_commit_equivocation_is_rejected_and_recorded(self) -> None:
+    def test_vertex_consensus_proof_tampering_is_rejected(self) -> None:
         network = SwarmNetwork()
         _, nodes = _create_agents(network)
         planner = next(node for node in nodes if node.agent_id == "agent-scout")
-        worker = next(node for node in nodes if node.agent_id == "agent-worker-0")
         for node in nodes:
             node.discover()
         planner.offer_task("task-eq", "target", 10.0)
-        worker.emit_commit_vote("task-eq")
-        honest_vote = network.events[-1]
-        forged_payload = dict(honest_vote.payload)
-        forged_payload["winner"] = "agent-worker-1"
-        forged_payload["digest"] = "bad-digest"
-        forged_envelope = worker._build_envelope(COMMIT_VOTE, forged_payload)
-        network.broadcast(forged_envelope)
-        votes = planner.votes_by_task.get("task-eq", [])
-        self.assertEqual(len(votes), 1)
-        self.assertIn("task-eq", planner.equivocation_evidence_by_task)
-        evidence = planner.equivocation_evidence_by_task["task-eq"][0]
-        self.assertIn(evidence["reason"], {"task_digest_mismatch", "voter_equivocation"})
+        active_members = network.active_node_ids()
+        _, _, proof, checks = _vertex_finalize_winner(
+            network=network,
+            task_id="task-eq",
+            active_members=active_members,
+            bids=list(planner.bids_by_task.get("task-eq", [])),
+        )
+        self.assertTrue(all(checks.values()))
+        tampered_proof = json.loads(json.dumps(proof))
+        tampered_proof["proof_hash"] = "tampered-proof-hash"
+        tampered_checks = VertexConsensus.verify_proof(tampered_proof, network.agent_secrets)
+        self.assertFalse(all(tampered_checks.values()))
 
     def test_acceptance_bundle_exports_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            acceptance = run_acceptance(output_dir=tmp, foxmq_backend="simulated")
+            acceptance = self._run_acceptance_mqtt(output_dir=tmp)
             self.assertTrue(os.path.exists(acceptance["report_path"]))
             self.assertTrue(all(acceptance["criteria"].values()))
             self.assertIn("secure_mesh_freeze", acceptance["criteria"])
             self.assertIn("multi_vendor_readiness", acceptance["criteria"])
             self.assertIn("route_negotiation_handoff", acceptance["criteria"])
+            self.assertIn("Coordination Correctness", acceptance["criteria"])
+            self.assertIn("Resilience", acceptance["criteria"])
+            self.assertIn("Auditability", acceptance["criteria"])
+            self.assertIn("Security Posture", acceptance["criteria"])
+            self.assertIn("Developer clarity", acceptance["criteria"])
+            self.assertIn("discover_and_formation", acceptance["criteria"])
             self.assertIn("task_bidding", acceptance["criteria"])
             self.assertIn("hive_memory_state_sync", acceptance["criteria"])
-            self.assertIn("verification_multisig_proof", acceptance["criteria"])
+            self.assertIn("verification_vertex_proof", acceptance["criteria"])
             self.assertIn("byo_agents_orchestrator_replaced", acceptance["criteria"])
             self.assertIn("security_attack_resistance", acceptance["criteria"])
             self.assertIn("observability_kpi_ready", acceptance["criteria"])
@@ -169,18 +482,61 @@ class Track3SwarmTests(unittest.TestCase):
             self.assertIn("commit_equivocation_guard", acceptance["criteria"])
             self.assertTrue(acceptance["criteria"]["task_bidding"])
             self.assertTrue(acceptance["criteria"]["hive_memory_state_sync"])
-            self.assertTrue(acceptance["criteria"]["verification_multisig_proof"])
+            self.assertTrue(acceptance["criteria"]["verification_vertex_proof"])
             self.assertTrue(acceptance["criteria"]["byo_agents_orchestrator_replaced"])
             self.assertTrue(acceptance["criteria"]["security_attack_resistance"])
             self.assertTrue(acceptance["criteria"]["observability_kpi_ready"])
+            self.assertTrue(acceptance["criteria"]["Coordination Correctness"])
+            self.assertTrue(acceptance["criteria"]["Resilience"])
+            self.assertTrue(acceptance["criteria"]["Auditability"])
+            self.assertTrue(acceptance["criteria"]["Security Posture"])
+            self.assertTrue(acceptance["criteria"]["Developer clarity"])
             self.assertIn("kpi_summary", acceptance)
+            self.assertIn("competition_alignment", acceptance)
+            self.assertTrue(acceptance["competition_alignment"]["Coordination Correctness"])
+            self.assertTrue(acceptance["competition_alignment"]["Resilience"])
+            self.assertTrue(acceptance["competition_alignment"]["Auditability"])
+            self.assertTrue(acceptance["competition_alignment"]["Security Posture"])
+            self.assertTrue(acceptance["competition_alignment"]["Developer clarity"])
             self.assertGreaterEqual(acceptance["kpi_summary"]["worst_p95_commit_latency_ms"], 0.0)
             self.assertGreaterEqual(acceptance["kpi_summary"]["lowest_verify_ack_ratio"], 1.0)
             self.assertNotIn("peer_discovery_state_sync", acceptance["criteria"])
 
+    def test_acceptance_covers_implemented_tashi_primitives(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            acceptance = self._run_acceptance_mqtt(output_dir=tmp)
+            scenarios = dict(acceptance.get("scenarios", {}))
+            self.assertEqual(set(scenarios.keys()), {"none", "delay", "drop"})
+            for scenario in scenarios.values():
+                checks = dict(scenario.get("checks", {}))
+                lattice = dict(scenario.get("lattice", {}))
+                self.assertTrue(checks["vertex_order_finalized"])
+                self.assertTrue(checks["vertex_signature_quorum"])
+                self.assertTrue(checks["vertex_proof_hash_valid"])
+                self.assertTrue(checks["vertex_proof_independently_verifiable"])
+                self.assertTrue(checks["lattice_discovery_ok"])
+                self.assertTrue(checks["lattice_authorization_ok"])
+                self.assertTrue(checks["lattice_independent_validation_ok"])
+                self.assertTrue(checks["lattice_reputation_routing_ok"])
+                self.assertTrue(checks["lattice_failover_ok"])
+                self.assertTrue(lattice["discovery_ok"])
+                self.assertTrue(lattice["authorized_participants_ok"])
+                self.assertTrue(lattice["independent_validation_ok"])
+                self.assertTrue(lattice["reputation_routing_ok"])
+                self.assertTrue(lattice["failover_ok"])
+                self.assertTrue(str(scenario.get("settlement_tx_hash", "")).startswith("0x"))
+                self.assertTrue(str(scenario.get("nanopayment_tx_hash", "")).startswith("0x"))
+                self.assertEqual(str(scenario.get("transport_backend", "")).strip().lower(), "mqtt")
+            competition_alignment = dict(acceptance.get("competition_alignment", {}))
+            self.assertTrue(competition_alignment["Coordination Correctness"])
+            self.assertTrue(competition_alignment["Resilience"])
+            self.assertTrue(competition_alignment["Auditability"])
+            self.assertTrue(competition_alignment["Security Posture"])
+            self.assertTrue(competition_alignment["Developer clarity"])
+
     def test_hive_memory_gossip_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="none", foxmq_backend="simulated")
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="none")
             self.assertTrue(summary["checks"]["hive_memory_consistent"])
             self.assertTrue(summary["checks"]["hive_memory_recovery_sync"])
             with open(summary["event_log_path"], "r", encoding="utf-8") as f:
@@ -190,7 +546,7 @@ class Track3SwarmTests(unittest.TestCase):
 
     def test_agent_economy_and_dual_sentinel_events_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="none", foxmq_backend="simulated")
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="none")
             with open(summary["event_log_path"], "r", encoding="utf-8") as f:
                 events = json.load(f)
             event_types = {event["event_type"] for event in events}
@@ -208,19 +564,23 @@ class Track3SwarmTests(unittest.TestCase):
 
     def test_demo_transport_backend_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(output_dir=tmp, fault_mode="none", foxmq_backend="simulated")
-            self.assertEqual(summary["transport_backend"], "simulated")
-            self.assertTrue(summary["checks"]["proof_anchor_valid"])
-            self.assertTrue(summary["checks"]["proof_independently_verifiable"])
+            summary = self._run_demo_mqtt(output_dir=tmp, fault_mode="none")
+            self.assertEqual(summary["transport_backend"], "mqtt")
+            self.assertTrue(summary["checks"]["vertex_proof_hash_valid"])
+            self.assertTrue(summary["checks"]["vertex_proof_independently_verifiable"])
             self.assertTrue(summary["checks"]["commit_equivocation_guarded"])
+            self.assertTrue(summary["competition_alignment"]["Coordination Correctness"])
+            self.assertTrue(summary["competition_alignment"]["Resilience"])
+            self.assertTrue(summary["competition_alignment"]["Auditability"])
+            self.assertTrue(summary["competition_alignment"]["Security Posture"])
+            self.assertTrue(summary["competition_alignment"]["Developer clarity"])
 
     def test_scale_with_dozens_of_workers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(
+            summary = self._run_demo_mqtt(
                 output_dir=tmp,
                 fault_mode="none",
                 worker_count=24,
-                foxmq_backend="simulated",
             )
             self.assertGreaterEqual(len(summary["active_nodes"]), 27)
             self.assertTrue(summary["checks"]["single_winner"])
@@ -238,54 +598,6 @@ class Track3SwarmTests(unittest.TestCase):
         network.restart_node(target.agent_id)
         network.sync_hive_memory(source_node_id=source.agent_id, target_node_ids=[target.agent_id])
         self.assertEqual(target.threat_ledger.get("threat-isolated"), "isolated-details")
-
-    def test_official_backend_uses_vertex_rs_bridge_when_configured(self) -> None:
-        sentinel_client = object()
-        with mock.patch("security_monitor.integration.foxmq_adapter._VertexRsBridgeClient", return_value=sentinel_client):
-            with mock.patch(
-                "security_monitor.integration.foxmq_adapter.os.getenv",
-                side_effect=lambda k, d=None: "vertex-rs-bridge --stdio" if k == "VERTEX_RS_BRIDGE_CMD" else d,
-            ):
-                adapter = FoxMQAdapter(node_id="n1", backend="official")
-        self.assertIs(adapter._official_client, sentinel_client)
-        self.assertIn("vertex-rs:", str(adapter.backend_info()["module"]))
-
-    def test_official_backend_prefers_explicit_bridge_cmd_over_env(self) -> None:
-        sentinel_client = object()
-        with mock.patch("security_monitor.integration.foxmq_adapter._VertexRsBridgeClient", return_value=sentinel_client) as patched:
-            with mock.patch("security_monitor.integration.foxmq_adapter.os.getenv", return_value=""):
-                adapter = FoxMQAdapter(
-                    node_id="n1",
-                    backend="official",
-                    bridge_cmd="vertex-rs-bridge --host 127.0.0.1 --port 1883 --stdio",
-                )
-        self.assertIs(adapter._official_client, sentinel_client)
-        patched.assert_called_once_with(
-            bridge_cmd="vertex-rs-bridge --host 127.0.0.1 --port 1883 --stdio",
-            node_id="n1",
-        )
-
-    def test_official_backend_without_sdk_or_bridge_raises(self) -> None:
-        with mock.patch("security_monitor.integration.foxmq_adapter.os.getenv", return_value=""):
-            with self.assertRaises(RuntimeError):
-                FoxMQAdapter(node_id="n1", backend="official")
-
-    def test_official_backend_bridge_executable_missing_has_actionable_error(self) -> None:
-        missing_cmd = "definitely-missing-vertex-rs-bridge-exe --stdio"
-        with self.assertRaises(RuntimeError) as ctx:
-            FoxMQAdapter(node_id="n1", backend="official", bridge_cmd=missing_cmd)
-        self.assertIn("executable not found", str(ctx.exception))
-        self.assertIn("VERTEX_RS_BRIDGE_CMD", str(ctx.exception))
-
-    def test_official_backend_wraps_bridge_process_start_failure(self) -> None:
-        with mock.patch("security_monitor.integration.foxmq_adapter.shutil.which", return_value="C:\\fake\\vertex-rs-bridge.exe"):
-            with mock.patch(
-                "security_monitor.integration.foxmq_adapter.subprocess.Popen",
-                side_effect=FileNotFoundError("missing dependency"),
-            ):
-                with self.assertRaises(RuntimeError) as ctx:
-                    FoxMQAdapter(node_id="n1", backend="official", bridge_cmd="vertex-rs-bridge --stdio")
-        self.assertIn("failed to start vertex-rs bridge command", str(ctx.exception))
 
     def test_mqtt_backend_prefers_explicit_addr_over_env(self) -> None:
         sentinel_client = object()
@@ -323,6 +635,203 @@ class Track3SwarmTests(unittest.TestCase):
         self.assertIs(adapter._official_client, sentinel_client)
         patched.assert_called_once_with(mqtt_addr="127.0.0.1:1886", node_id="n3")
 
+    def _build_agent_process_command(
+        self,
+        agent_id: str,
+        run_id: str,
+        topic_namespace: str,
+        capabilities: str,
+        extra_args: list[str] | None = None,
+    ) -> list[str]:
+        command = [
+            sys.executable,
+            "-m",
+            "security_monitor.track3.main",
+            "--mode",
+            "agent-process",
+            "--agent-id",
+            agent_id,
+            "--agent-capabilities",
+            capabilities,
+            "--foxmq-backend",
+            "mqtt",
+            "--foxmq-mqtt-addr",
+            _MQTT_E2E_ADDR,
+            "--run-id",
+            run_id,
+            "--topic-namespace",
+            topic_namespace,
+        ]
+        if extra_args:
+            command.extend(extra_args)
+        return command
+
+    def _run_multiprocess_cluster_mission(
+        self,
+        output_dir: str,
+        run_id_prefix: str,
+        agent_specs: list[tuple[str, str]],
+        pre_guardian_delay_seconds: float = 0.0,
+        ready_timeout_seconds: float = 30.0,
+        terminate_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        run_id = f"{run_id_prefix}-{int(time.time())}"
+        topic_namespace = f"run-{run_id}"
+        self.assertGreaterEqual(len(agent_specs), 1)
+        bootstrap_agent_id, bootstrap_capabilities = agent_specs[0]
+        bootstrap_wait_timeout_seconds = max(40.0, float(ready_timeout_seconds) + 20.0)
+        bootstrap_command = self._build_agent_process_command(
+            agent_id=bootstrap_agent_id,
+            run_id=run_id,
+            topic_namespace=topic_namespace,
+            capabilities=bootstrap_capabilities,
+            extra_args=[
+                "--output-dir",
+                output_dir,
+                "--bootstrap-mission",
+                "--exit-on-mission-complete",
+                "--bootstrap-ready-timeout-seconds",
+                str(ready_timeout_seconds),
+                "--bootstrap-pre-guardian-delay-seconds",
+                str(pre_guardian_delay_seconds),
+                "--bootstrap-wait-timeout-seconds",
+                str(bootstrap_wait_timeout_seconds),
+            ],
+        )
+        worker_commands = [
+            self._build_agent_process_command(
+                agent_id=agent_id,
+                run_id=run_id,
+                topic_namespace=topic_namespace,
+                capabilities=capabilities,
+            )
+            for agent_id, capabilities in agent_specs[1:]
+        ]
+        worker_processes = [subprocess.Popen(command) for command in worker_commands]
+        if worker_processes:
+            time.sleep(1.0)
+            for proc in worker_processes:
+                if proc.poll() is not None:
+                    raise AssertionError("worker process exited before bootstrap mission started")
+        bootstrap_proc = subprocess.Popen(
+            bootstrap_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        bootstrap_stdout = ""
+        bootstrap_stderr = ""
+        try:
+            if terminate_agent_id:
+                time.sleep(2.0)
+                for (agent_id, _), proc in zip(agent_specs[1:], worker_processes):
+                    if agent_id == terminate_agent_id and proc.poll() is None:
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait(timeout=5)
+            bootstrap_stdout, bootstrap_stderr = bootstrap_proc.communicate(timeout=180)
+        finally:
+            for proc in worker_processes:
+                if proc.poll() is None:
+                    proc.terminate()
+            for proc in worker_processes:
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+        bootstrap_returncode = int(bootstrap_proc.returncode or 0)
+        self.assertEqual(bootstrap_returncode, 0, msg=f"stdout={bootstrap_stdout}\nstderr={bootstrap_stderr}")
+        report_path = os.path.join(output_dir, "multiprocess_mission_record.json")
+        self.assertTrue(os.path.exists(report_path))
+        with open(report_path, "r", encoding="utf-8") as f:
+            report = json.load(f)
+        return report
+
+    def _assert_cluster_competition_requirements(self, report: dict[str, Any]) -> None:
+        self.assertTrue(bool(report.get("all_success")))
+        self.assertTrue(bool(report.get("role_identity_negotiation")))
+        role_identity_assignments = dict(report.get("role_identity_assignments", {}))
+        expected_assignments = {
+            "scout": "agent-scout-only",
+            "guardian": "agent-guardian-only",
+            "verifier": "agent-verifier-only",
+        }
+        for role_name, expected_agent in expected_assignments.items():
+            assignment = dict(role_identity_assignments.get(role_name, {}))
+            self.assertEqual(str(assignment.get("role_name", "")).strip().lower(), role_name)
+            self.assertEqual(str(assignment.get("assigned_agent", "")).strip(), expected_agent)
+        steps = list(report.get("steps", []))
+        self.assertEqual(len(steps), 3)
+        role_names = [str(step.get("role_name", "")).strip().lower() for step in steps]
+        self.assertEqual(set(role_names), {"scout", "guardian", "verifier"})
+        self.assertTrue(all(str(step.get("state", "")).strip().lower() == "success" for step in steps))
+        task_ids = [str(step.get("task_id", "")).strip() for step in steps]
+        self.assertEqual(len(task_ids), len(set(task_ids)))
+        self.assertTrue(all(task_id for task_id in task_ids))
+        selected_agents = [str(step.get("selected_agent", "")).strip() for step in steps]
+        self.assertEqual(set(selected_agents), set(expected_assignments.values()))
+        readiness = dict(report.get("readiness", {}))
+        for expected_agent, expected_roles in (
+            ("agent-scout-only", {"scout"}),
+            ("agent-guardian-only", {"guardian"}),
+            ("agent-verifier-only", {"verifier"}),
+        ):
+            self.assertIn(expected_agent, readiness)
+            ready_item = dict(readiness.get(expected_agent, {}))
+            self.assertEqual(str(ready_item.get("state", "")).strip().lower(), "success")
+            announced_roles = {
+                str(role).strip().lower()
+                for role in ready_item.get("roles", [])
+                if str(role).strip()
+            }
+            self.assertEqual(announced_roles, expected_roles)
+        peer_snapshots = list(report.get("peer_snapshots", []))
+        self.assertGreaterEqual(len(peer_snapshots), 1)
+        max_active_peers = max(len(list(item.get("active_peers", []))) for item in peer_snapshots)
+        self.assertGreaterEqual(max_active_peers, 2)
+        tashi_alignment = dict(report.get("tashi_alignment", {}))
+        self.assertTrue(bool(tashi_alignment.get("peer_discovery_observed")))
+        self.assertTrue(bool(tashi_alignment.get("proof_of_coordination_verifiable")))
+        lattice = dict(report.get("lattice", {}))
+        self.assertTrue(bool(lattice.get("discovery_ok")))
+        self.assertTrue(bool(lattice.get("authorized_participants_ok")))
+        self.assertTrue(bool(lattice.get("independent_validation_ok")))
+        self.assertTrue(bool(lattice.get("reputation_routing_ok")))
+        self.assertTrue(bool(lattice.get("failover_ok")))
+        competition_alignment = dict(report.get("competition_alignment", {}))
+        self.assertTrue(bool(competition_alignment.get("Coordination Correctness")))
+        self.assertTrue(bool(competition_alignment.get("Resilience")))
+        self.assertTrue(bool(competition_alignment.get("Auditability")))
+        self.assertTrue(bool(competition_alignment.get("Security Posture")))
+        self.assertTrue(bool(competition_alignment.get("Developer clarity")))
+        proof_checks = dict(report.get("proof_checks", {}))
+        self.assertTrue(proof_checks)
+        self.assertTrue(all(bool(value) for value in proof_checks.values()))
+        coordination_proof = dict(report.get("coordination_proof", {}))
+        signatures = dict(coordination_proof.get("multisig_summary", {}))
+        self.assertEqual(set(signatures.keys()), set(expected_assignments.values()))
+
+    @unittest.skipUnless(
+        _MULTIPROCESS_E2E_ENABLED,
+        "set MULTIPROCESS_E2E=1 and FOXMQ_MQTT_ADDR to run multiprocess mqtt e2e",
+    )
+    def test_single_machine_cluster_competition_requirements_e2e(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._run_multiprocess_cluster_mission(
+                output_dir=os.path.join(tmp, "cluster-requirements"),
+                run_id_prefix="cluster-req",
+                agent_specs=[
+                    ("agent-scout-only", "scout"),
+                    ("agent-guardian-only", "guardian"),
+                    ("agent-verifier-only", "verifier"),
+                ],
+            )
+            self._assert_cluster_competition_requirements(report)
+
     @unittest.skipUnless(_MQTT_E2E_ENABLED, "set MQTT_E2E=1 and FOXMQ_MQTT_ADDR to run mqtt transport e2e")
     def test_mqtt_transport_demo_e2e(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,90 +846,172 @@ class Track3SwarmTests(unittest.TestCase):
             self.assertTrue(summary["checks"]["single_winner"])
             self.assertTrue(summary["checks"]["no_double_assignment"])
 
-    @unittest.skipUnless(_OFFICIAL_E2E_ENABLED, "set OFFICIAL_E2E=1 and VERTEX_RS_BRIDGE_CMD to run official transport e2e")
-    def test_official_transport_demo_e2e(self) -> None:
+    @unittest.skipUnless(
+        _MULTIPROCESS_E2E_ENABLED,
+        "set MULTIPROCESS_E2E=1 and FOXMQ_MQTT_ADDR to run multiprocess mqtt e2e",
+    )
+    def test_multiprocess_mission_e2e(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            summary = run_demo(
-                output_dir=tmp,
-                fault_mode="none",
-                worker_count=3,
-                foxmq_backend="official",
-                vertex_rs_bridge_cmd=_OFFICIAL_E2E_BRIDGE_CMD,
+            report = self._run_multiprocess_cluster_mission(
+                output_dir=os.path.join(tmp, "mission"),
+                run_id_prefix="e2e",
+                agent_specs=[
+                    ("agent-scout", "scout,guardian,verifier"),
+                    ("agent-guardian", "scout,guardian,verifier"),
+                    ("agent-verifier", "scout,guardian,verifier"),
+                ],
+                ready_timeout_seconds=30.0,
             )
-            self.assertEqual(summary["transport_backend"], "official")
-            self.assertTrue(summary["checks"]["single_winner"])
-            self.assertTrue(summary["checks"]["no_double_assignment"])
-            self.assertTrue(summary["checks"]["proof_chain_complete"])
+            run_id = str(report.get("run_id", "")).strip()
+            topic_namespace = str(report.get("topic_namespace", "")).strip()
+            self.assertTrue(report["all_success"])
+            self.assertEqual(report["run_id"], run_id)
+            self.assertEqual(report["topic_namespace"], topic_namespace)
+            self.assertTrue(bool(report.get("role_identity_negotiation")))
+            role_identity_assignments = dict(report.get("role_identity_assignments", {}))
+            for role_name in ("scout", "guardian", "verifier"):
+                self.assertIn(role_name, role_identity_assignments)
+                assignment = dict(role_identity_assignments.get(role_name, {}))
+                self.assertEqual(str(assignment.get("role_name", "")).strip().lower(), role_name)
+                self.assertTrue(str(assignment.get("assigned_agent", "")).strip())
+            announcements = list(report.get("agent_announcements", []))
+            self.assertGreaterEqual(len(announcements), 1)
+            roles_by_agent: dict[str, set[str]] = {}
+            for item in announcements:
+                agent_id = str(item.get("agent_id", "")).strip()
+                roles = {
+                    str(role).strip().lower()
+                    for role in item.get("roles", [])
+                    if str(role).strip()
+                }
+                if agent_id:
+                    roles_by_agent[agent_id] = roles
+            for expected_agent in ("agent-scout", "agent-guardian", "agent-verifier"):
+                self.assertIn(expected_agent, roles_by_agent)
+                self.assertTrue({"scout", "guardian", "verifier"}.issubset(roles_by_agent[expected_agent]))
+            self.assertIn("readiness", report)
+            self.assertIn("step_metrics", report)
+            self.assertIn("standard_metrics", report)
+            self.assertIn("success_rate", report["standard_metrics"])
+            self.assertIn("end_to_end_latency_ms", report["standard_metrics"])
+            self.assertIn("retry_count", report["standard_metrics"])
+            self.assertIn("timeout_count", report["standard_metrics"])
 
     @unittest.skipUnless(
-        _OFFICIAL_MULTI_E2E_ENABLED,
-        "set OFFICIAL_MULTI_E2E=1 and VERTEX_RS_BRIDGE_CMD_TEMPLATE to run multi-port official transport e2e",
+        _MULTIPROCESS_E2E_ENABLED,
+        "set MULTIPROCESS_E2E=1 and FOXMQ_MQTT_ADDR to run multiprocess mqtt e2e",
     )
-    def test_official_transport_multi_port_loopback_e2e(self) -> None:
-        ports = [1883, 1884, 1885]
+    def test_agent_only_bootstrap_mission_e2e(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            def _run_port(port: int) -> dict:
-                bridge_cmd = _OFFICIAL_MULTI_E2E_TEMPLATE.format(host="127.0.0.1", port=port)
-                output_dir = os.path.join(tmp, f"node-{port}")
-                command = [
-                    sys.executable,
-                    "-m",
-                    "security_monitor.swarm.demo_track3",
-                    "--mode",
-                    "single",
-                    "--workers",
-                    "2",
-                    "--fault",
-                    "none",
-                    "--foxmq-backend",
-                    "official",
-                    "--vertex-rs-bridge-cmd",
-                    bridge_cmd,
+            run_id = f"agent-only-{int(time.time())}"
+            topic_namespace = f"run-{run_id}"
+            output_dir = os.path.join(tmp, "agent-only")
+            bootstrap_command = self._build_agent_process_command(
+                agent_id="agent-scout",
+                run_id=run_id,
+                topic_namespace=topic_namespace,
+                capabilities="scout,guardian,verifier",
+                extra_args=[
                     "--output-dir",
                     output_dir,
-                ]
-                start = time.perf_counter()
-                completed = subprocess.run(command, capture_output=True, text=True, timeout=180)
-                proof_path = os.path.join(output_dir, "coordination_proof.json")
-                proof_event_count = -1
-                if os.path.exists(proof_path):
-                    with open(proof_path, "r", encoding="utf-8") as f:
-                        proof = json.load(f)
-                    proof_event_count = int(proof.get("event_count", -1))
-                return {
-                    "port": port,
-                    "returncode": completed.returncode,
-                    "stdout": completed.stdout,
-                    "stderr": completed.stderr,
-                    "proof_path": proof_path,
-                    "proof_event_count": proof_event_count,
-                    "elapsed_ms": round((time.perf_counter() - start) * 1000.0, 2),
-                }
+                    "--bootstrap-mission",
+                    "--exit-on-mission-complete",
+                    "--bootstrap-ready-timeout-seconds",
+                    "30",
+                    "--bootstrap-wait-timeout-seconds",
+                    "60",
+                ],
+            )
+            worker_commands = [
+                self._build_agent_process_command(
+                    agent_id="agent-guardian",
+                    run_id=run_id,
+                    topic_namespace=topic_namespace,
+                    capabilities="scout,guardian,verifier",
+                ),
+                self._build_agent_process_command(
+                    agent_id="agent-verifier",
+                    run_id=run_id,
+                    topic_namespace=topic_namespace,
+                    capabilities="scout,guardian,verifier",
+                ),
+            ]
+            worker_processes = [subprocess.Popen(command) for command in worker_commands]
+            bootstrap_proc = subprocess.Popen(
+                bootstrap_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                bootstrap_stdout, bootstrap_stderr = bootstrap_proc.communicate(timeout=180)
+                self.assertEqual(
+                    bootstrap_proc.returncode,
+                    0,
+                    msg=f"stdout={bootstrap_stdout}\nstderr={bootstrap_stderr}",
+                )
+            finally:
+                for proc in worker_processes:
+                    if proc.poll() is None:
+                        proc.terminate()
+                for proc in worker_processes:
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=5)
+            report_path = os.path.join(output_dir, "multiprocess_mission_record.json")
+            self.assertTrue(os.path.exists(report_path))
+            with open(report_path, "r", encoding="utf-8") as f:
+                report = json.load(f)
+            self.assertTrue(bool(report.get("all_success")))
+            self.assertEqual(str(report.get("transport_backend", "")).strip().lower(), "mqtt")
+            self.assertEqual(str(report.get("run_id", "")).strip(), run_id)
+            self.assertEqual(str(report.get("topic_namespace", "")).strip(), topic_namespace)
+            steps = list(report.get("steps", []))
+            self.assertEqual(len(steps), 3)
+            self.assertTrue(all(str(item.get("state", "")).strip().lower() == "success" for item in steps))
+            proof_checks = dict(report.get("proof_checks", {}))
+            self.assertTrue(proof_checks)
+            self.assertTrue(all(bool(value) for value in proof_checks.values()))
 
-            results = []
-            with ThreadPoolExecutor(max_workers=len(ports)) as executor:
-                future_to_port = {executor.submit(_run_port, port): port for port in ports}
-                for future in as_completed(future_to_port):
-                    results.append(future.result())
-
-            failures = []
-            for result in sorted(results, key=lambda item: int(item["port"])):
-                if int(result["returncode"]) != 0:
-                    failures.append(
-                        f"port={result['port']} returncode={result['returncode']} elapsed_ms={result['elapsed_ms']}\nstdout={result['stdout']}\nstderr={result['stderr']}"
-                    )
-                    continue
-                if "Transport:    official" not in str(result["stdout"]):
-                    failures.append(
-                        f"port={result['port']} missing official transport marker elapsed_ms={result['elapsed_ms']}\nstdout={result['stdout']}"
-                    )
-                    continue
-                if not os.path.exists(str(result["proof_path"])) or int(result["proof_event_count"]) <= 0:
-                    failures.append(
-                        f"port={result['port']} invalid proof output elapsed_ms={result['elapsed_ms']} proof_path={result['proof_path']} proof_event_count={result['proof_event_count']}"
-                    )
-            self.assertFalse(failures, msg="\n\n".join(failures))
-
+    @unittest.skipUnless(
+        _MULTIPROCESS_RECOVERY_E2E_ENABLED,
+        "set MULTIPROCESS_RECOVERY_E2E=1 and FOXMQ_MQTT_ADDR to run multiprocess recovery e2e",
+    )
+    def test_multiprocess_mission_recovery_e2e(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = self._run_multiprocess_cluster_mission(
+                output_dir=os.path.join(tmp, "mission-recovery"),
+                run_id_prefix="recovery-dynamic",
+                agent_specs=[
+                    ("agent-scout", "scout,guardian,verifier"),
+                    ("agent-guardian", "scout,guardian,verifier"),
+                    ("agent-verifier", "scout,guardian,verifier"),
+                ],
+                pre_guardian_delay_seconds=3.0,
+                terminate_agent_id="agent-guardian",
+            )
+            self.assertTrue(report["all_success"])
+            self.assertTrue(bool(report.get("role_identity_negotiation")))
+            role_identity_assignments = dict(report.get("role_identity_assignments", {}))
+            self.assertIn("guardian", role_identity_assignments)
+            guardian_assignment = dict(role_identity_assignments.get("guardian", {}))
+            self.assertEqual(str(guardian_assignment.get("role_name", "")).strip().lower(), "guardian")
+            self.assertTrue(str(guardian_assignment.get("assigned_agent", "")).strip())
+            announcements = list(report.get("agent_announcements", []))
+            self.assertGreaterEqual(len(announcements), 1)
+            steps = list(report.get("steps", []))
+            self.assertGreaterEqual(len(steps), 3)
+            guardian_steps = [step for step in steps if str(step.get("role_name", "")).strip().lower() == "guardian"]
+            self.assertGreaterEqual(len(guardian_steps), 1)
+            guardian_selected_agents = {str(step.get("selected_agent", "")).strip() for step in guardian_steps}
+            self.assertNotIn("agent-guardian", guardian_selected_agents)
+            metrics = dict(report["standard_metrics"])
+            self.assertGreater(float(metrics["success_rate"]), 0.9)
+            self.assertGreaterEqual(float(metrics["end_to_end_latency_ms"]), 0.0)
+            self.assertGreaterEqual(int(metrics["retry_count"]), 0)
+            self.assertGreaterEqual(int(metrics["timeout_count"]), 0)
 
 if __name__ == "__main__":
     unittest.main()

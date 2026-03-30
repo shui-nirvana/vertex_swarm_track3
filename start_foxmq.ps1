@@ -1,6 +1,6 @@
 param(
-    [string]$Version = "v0.3.0",
-    [string]$InstallDir = "artifacts\foxmq_runtime",
+    [string]$Version = "v0.3.1",
+    [string]$ToolsDir = "tools\foxmq",
     [string]$MqttAddr = "127.0.0.1:1883",
     [string]$ClusterAddr = "127.0.0.1:19793",
     [switch]$AllowAnonymousLogin = $true,
@@ -10,22 +10,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$runtimeDir = Join-Path $repoRoot $InstallDir
-$zipName = "foxmq_$($Version.TrimStart('v'))_windows-amd64.zip"
-$downloadUrl = "https://github.com/tashigg/foxmq/releases/download/$Version/$zipName"
-$zipPath = Join-Path $runtimeDir $zipName
+$runtimeDir = Join-Path (Join-Path $repoRoot $ToolsDir) $Version
 $foxmqExe = Join-Path $runtimeDir "foxmq.exe"
 $foxmqDataDir = Join-Path $runtimeDir "foxmq.d"
 $keyPath = Join-Path $foxmqDataDir "key_0.pem"
 
-New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-
 if (-not (Test-Path $foxmqExe)) {
-    if (-not (Test-Path $zipPath)) {
-        Write-Host "Downloading $downloadUrl"
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
-    }
-    Expand-Archive -Path $zipPath -DestinationPath $runtimeDir -Force
+    throw "foxmq.exe not found at $foxmqExe. Please manually place FoxMQ $Version at this path."
 }
 
 if (-not (Test-Path $foxmqDataDir)) {

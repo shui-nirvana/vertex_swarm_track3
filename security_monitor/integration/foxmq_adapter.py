@@ -1,148 +1,13 @@
+import hashlib
 import json
 import logging
 import os
-import shlex
-import shutil
-import subprocess
 import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-
-
-class _VertexRsBridgeClient:
-    def __init__(self, bridge_cmd: str, node_id: str, timeout_seconds: float = 3.0):
-        self.bridge_cmd = bridge_cmd
-        self.node_id = node_id
-        self.timeout_seconds = timeout_seconds
-        self._subscriptions: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
-        self._pending: Dict[str, Dict[str, Any]] = {}
-        self._pending_condition = threading.Condition()
-        self._request_counter = 0
-        args = shlex.split(bridge_cmd, posix=False)
-        if not args:
-            raise RuntimeError("VERTEX_RS_BRIDGE_CMD is empty")
-        executable = args[0]
-        resolved_executable = shutil.which(executable) if not os.path.isabs(executable) else executable
-        if resolved_executable is None:
-            raise RuntimeError(
-                f"vertex-rs bridge executable not found: {executable}; "
-                "set VERTEX_RS_BRIDGE_CMD to an absolute executable path, "
-                "for example: E:\\tools\\vertex\\vertex-rs-bridge.exe --host 127.0.0.1 --port 1883 --stdio"
-            )
-        try:
-            self._process = subprocess.Popen(
-                args,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                f"failed to start vertex-rs bridge command: {bridge_cmd}; "
-                "verify executable path and arguments in VERTEX_RS_BRIDGE_CMD"
-            ) from exc
-        self._stdout_thread = threading.Thread(target=self._read_stdout_loop, daemon=True)
-        self._stderr_thread = threading.Thread(target=self._read_stderr_loop, daemon=True)
-        self._stdout_thread.start()
-        self._stderr_thread.start()
-        self._request("init", {"node_id": node_id})
-
-    def _next_request_id(self) -> str:
-        self._request_counter += 1
-        return f"req-{self._request_counter}"
-
-    def _read_stdout_loop(self) -> None:
-        stdout = self._process.stdout
-        if stdout is None:
-            return
-        for line in stdout:
-            payload = line.strip()
-            if not payload:
-                continue
-            try:
-                message = json.loads(payload)
-            except Exception:
-                logger.warning(f"vertex-rs bridge emitted non-json line: {payload}")
-                continue
-            message_type = str(message.get("type", ""))
-            if message_type == "event":
-                topic = str(message.get("topic", ""))
-                envelope = dict(message.get("message", {}))
-                for callback in self._subscriptions.get(topic, []):
-                    try:
-                        callback(envelope)
-                    except Exception as exc:
-                        logger.error(f"vertex-rs bridge callback failed on {topic}: {exc}")
-                continue
-            request_id = str(message.get("id", ""))
-            if request_id:
-                with self._pending_condition:
-                    self._pending[request_id] = message
-                    self._pending_condition.notify_all()
-
-    def _read_stderr_loop(self) -> None:
-        stderr = self._process.stderr
-        if stderr is None:
-            return
-        for line in stderr:
-            text = line.strip()
-            if text:
-                logger.warning(f"vertex-rs bridge stderr: {text}")
-
-    def _request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        if self._process.poll() is not None:
-            raise RuntimeError("vertex-rs bridge process has exited")
-        request_id = self._next_request_id()
-        wire_message = {
-            "id": request_id,
-            "method": method,
-            "params": params or {},
-        }
-        stdin = self._process.stdin
-        if stdin is None:
-            raise RuntimeError("vertex-rs bridge stdin not available")
-        stdin.write(json.dumps(wire_message, ensure_ascii=False) + "\n")
-        stdin.flush()
-        deadline = time.time() + self.timeout_seconds
-        with self._pending_condition:
-            while request_id not in self._pending:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    raise RuntimeError(f"vertex-rs bridge timeout on method {method}")
-                self._pending_condition.wait(timeout=remaining)
-            response = self._pending.pop(request_id)
-        if "error" in response and response["error"]:
-            raise RuntimeError(f"vertex-rs bridge error on {method}: {response['error']}")
-        return response
-
-    def join_network(self, topic: str) -> None:
-        self._request("join_network", {"topic": topic})
-
-    def leave_network(self) -> None:
-        try:
-            self._request("leave_network", {})
-        finally:
-            self._process.terminate()
-
-    def subscribe(self, topic: str, callback: Callable[[Dict[str, Any]], None]) -> None:
-        self._subscriptions.setdefault(topic, []).append(callback)
-        self._request("subscribe", {"topic": topic})
-
-    def publish(self, topic: str, message: Dict[str, Any]) -> None:
-        self._request("publish", {"topic": topic, "message": message})
-
-    def get_active_peers(self) -> List[str]:
-        response = self._request("get_active_peers", {})
-        peers = response.get("result", [])
-        if isinstance(peers, list):
-            return [str(peer) for peer in peers]
-        return []
 
 
 class _FoxMqttClient:
@@ -154,6 +19,20 @@ class _FoxMqttClient:
         self._connected = threading.Event()
         self._connect_error: Optional[str] = None
         self._mqtt_addr = mqtt_addr
+        self._publish_qos = self._parse_qos(os.getenv("FOXMQ_MQTT_QOS", "1"), default=1)
+        self._subscribe_qos = self._parse_qos(os.getenv("FOXMQ_MQTT_SUB_QOS", str(self._publish_qos)), default=self._publish_qos)
+        self._keepalive = self._parse_keepalive(os.getenv("FOXMQ_MQTT_KEEPALIVE", "30"), default=30)
+        self._clean_session = self._parse_bool(os.getenv("FOXMQ_MQTT_CLEAN_SESSION", "1"))
+        self._clean_start = self._parse_bool(os.getenv("FOXMQ_MQTT_CLEAN_START", "1"))
+        self._session_expiry = self._parse_int(os.getenv("FOXMQ_MQTT_SESSION_EXPIRY", "0"), default=0, minimum=0)
+        self._receive_maximum = self._parse_int(os.getenv("FOXMQ_MQTT_RECEIVE_MAXIMUM", "0"), default=0, minimum=0)
+        self._max_inflight = self._parse_int(os.getenv("FOXMQ_MQTT_MAX_INFLIGHT", "0"), default=0, minimum=0)
+        self._max_queued = self._parse_int(os.getenv("FOXMQ_MQTT_MAX_QUEUED", "0"), default=0, minimum=0)
+        self._will_topic = str(os.getenv("FOXMQ_MQTT_WILL_TOPIC", "")).strip()
+        self._will_payload = str(os.getenv("FOXMQ_MQTT_WILL_PAYLOAD", "")).strip()
+        self._will_qos = self._parse_qos(os.getenv("FOXMQ_MQTT_WILL_QOS", str(self._publish_qos)), default=self._publish_qos)
+        self._will_retain = self._parse_bool(os.getenv("FOXMQ_MQTT_WILL_RETAIN", "0"))
+        protocol_label = str(os.getenv("FOXMQ_MQTT_PROTOCOL", "3.1.1")).strip().lower()
         host, port = self._parse_mqtt_addr(mqtt_addr)
         try:
             import paho.mqtt.client as mqtt
@@ -162,19 +41,72 @@ class _FoxMqttClient:
                 "mqtt FoxMQ backend requested but paho-mqtt is not installed; "
                 "run `python -m pip install paho-mqtt`"
             ) from exc
+        mqtt_v5 = getattr(mqtt, "MQTTv5", None)
+        selected_protocol = mqtt.MQTTv311
+        if protocol_label in {"5", "mqttv5", "v5"} and mqtt_v5 is not None:
+            selected_protocol = mqtt_v5
+        self._mqtt = mqtt
+        self._is_mqtt_v5 = mqtt_v5 is not None and selected_protocol == mqtt_v5
         callback_api_version = getattr(getattr(mqtt, "CallbackAPIVersion", None), "VERSION2", None)
+        client_id = self._build_client_id(node_id)
         if callback_api_version is None:
-            self._client = mqtt.Client(client_id=f"foxmq-{node_id}", protocol=mqtt.MQTTv5)
+            if self._is_mqtt_v5:
+                self._client = mqtt.Client(client_id=client_id, protocol=selected_protocol)
+            else:
+                self._client = mqtt.Client(
+                    client_id=client_id,
+                    protocol=selected_protocol,
+                    clean_session=self._clean_session,
+                )
         else:
-            self._client = mqtt.Client(
-                callback_api_version=callback_api_version,
-                client_id=f"foxmq-{node_id}",
-                protocol=mqtt.MQTTv5,
-            )
+            if self._is_mqtt_v5:
+                self._client = mqtt.Client(
+                    callback_api_version=callback_api_version,
+                    client_id=client_id,
+                    protocol=selected_protocol,
+                )
+            else:
+                self._client = mqtt.Client(
+                    callback_api_version=callback_api_version,
+                    client_id=client_id,
+                    protocol=selected_protocol,
+                    clean_session=self._clean_session,
+                )
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
+        if self._will_topic:
+            will_payload = self._will_payload or json.dumps(
+                {"kind": "will_disconnect", "agent_id": self.node_id, "timestamp": time.time()},
+                ensure_ascii=False,
+            )
+            self._client.will_set(
+                self._will_topic,
+                payload=will_payload,
+                qos=self._will_qos,
+                retain=self._will_retain,
+            )
+        if self._max_inflight > 0:
+            self._client.max_inflight_messages_set(self._max_inflight)
+        if self._max_queued > 0:
+            self._client.max_queued_messages_set(self._max_queued)
+        username = str(os.getenv("FOXMQ_MQTT_USERNAME", "")).strip()
+        if username:
+            self._client.username_pw_set(username=username, password=os.getenv("FOXMQ_MQTT_PASSWORD", ""))
+        if self._parse_bool(os.getenv("FOXMQ_MQTT_TLS", "0")):
+            ca_certs = str(os.getenv("FOXMQ_MQTT_TLS_CA_CERTS", "")).strip() or None
+            certfile = str(os.getenv("FOXMQ_MQTT_TLS_CERTFILE", "")).strip() or None
+            keyfile = str(os.getenv("FOXMQ_MQTT_TLS_KEYFILE", "")).strip() or None
+            self._client.tls_set(ca_certs=ca_certs, certfile=certfile, keyfile=keyfile)
+            if self._parse_bool(os.getenv("FOXMQ_MQTT_TLS_INSECURE", "0")):
+                self._client.tls_insecure_set(True)
         try:
-            self._client.connect(host, port, keepalive=30)
+            connect_kwargs: Dict[str, Any] = {"keepalive": self._keepalive}
+            if self._is_mqtt_v5:
+                connect_kwargs["clean_start"] = self._clean_start
+                connect_properties = self._build_connect_properties()
+                if connect_properties is not None:
+                    connect_kwargs["properties"] = connect_properties
+            self._client.connect(host, port, **connect_kwargs)
         except Exception as exc:
             raise RuntimeError(
                 f"failed to connect to FoxMQ broker at {mqtt_addr}; "
@@ -189,6 +121,18 @@ class _FoxMqttClient:
             self._client.loop_stop()
             self._client.disconnect()
             raise RuntimeError(self._connect_error)
+
+    @staticmethod
+    def _build_client_id(node_id: str) -> str:
+        raw = f"foxmq-{node_id}"
+        compact = "".join(ch for ch in raw if ch.isalnum() or ch in {"-", "_"})
+        if not compact:
+            compact = f"foxmq-{uuid.uuid4().hex[:8]}"
+        if len(compact) <= 23:
+            return compact
+        digest = hashlib.sha1(compact.encode("utf-8")).hexdigest()[:8]
+        keep = max(1, 23 - len(digest) - 1)
+        return f"{compact[:keep]}-{digest}"
 
     @staticmethod
     def _parse_mqtt_addr(mqtt_addr: str) -> Tuple[str, int]:
@@ -223,6 +167,104 @@ class _FoxMqttClient:
         except Exception:
             return -1
 
+    @staticmethod
+    def _parse_bool(raw: Any) -> bool:
+        value = str(raw).strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _parse_qos(raw: Any, default: int) -> int:
+        try:
+            parsed = int(str(raw).strip())
+        except Exception:
+            return int(default)
+        if parsed < 0:
+            return 0
+        if parsed > 2:
+            return 2
+        return parsed
+
+    @staticmethod
+    def _parse_keepalive(raw: Any, default: int) -> int:
+        try:
+            parsed = int(str(raw).strip())
+        except Exception:
+            return int(default)
+        if parsed <= 0:
+            return int(default)
+        return parsed
+
+    @staticmethod
+    def _parse_int(raw: Any, default: int, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+        try:
+            parsed = int(str(raw).strip())
+        except Exception:
+            return int(default)
+        if minimum is not None and parsed < minimum:
+            return int(minimum)
+        if maximum is not None and parsed > maximum:
+            return int(maximum)
+        return parsed
+
+    def _build_connect_properties(self) -> Optional[Any]:
+        if not self._is_mqtt_v5:
+            return None
+        properties_cls = getattr(self._mqtt, "Properties", None)
+        packet_types = getattr(self._mqtt, "PacketTypes", None)
+        if properties_cls is None or packet_types is None:
+            return None
+        properties = properties_cls(packet_types.CONNECT)
+        changed = False
+        if self._session_expiry > 0:
+            properties.SessionExpiryInterval = int(self._session_expiry)
+            changed = True
+        if self._receive_maximum > 0:
+            properties.ReceiveMaximum = int(self._receive_maximum)
+            changed = True
+        if changed:
+            return properties
+        return None
+
+    def _build_publish_properties(self, message: Dict[str, Any]) -> Optional[Any]:
+        if not self._is_mqtt_v5:
+            return None
+        properties_cls = getattr(self._mqtt, "Properties", None)
+        packet_types = getattr(self._mqtt, "PacketTypes", None)
+        if properties_cls is None or packet_types is None:
+            return None
+        properties = properties_cls(packet_types.PUBLISH)
+        changed = False
+        response_topic = message.pop("__response_topic", None)
+        if response_topic is not None:
+            properties.ResponseTopic = str(response_topic)
+            changed = True
+        correlation_data = message.pop("__correlation_data", None)
+        if correlation_data is not None:
+            if isinstance(correlation_data, bytes):
+                properties.CorrelationData = correlation_data
+            else:
+                properties.CorrelationData = str(correlation_data).encode("utf-8")
+            changed = True
+        topic_alias = message.pop("__topic_alias", None)
+        if topic_alias is not None:
+            properties.TopicAlias = self._parse_int(topic_alias, default=0, minimum=0, maximum=65535)
+            changed = True
+        user_properties = message.pop("__user_properties", None)
+        if isinstance(user_properties, dict):
+            properties.UserProperty = [(str(k), str(v)) for k, v in user_properties.items()]
+            changed = True
+        elif isinstance(user_properties, list):
+            pairs: list[tuple[str, str]] = []
+            for item in user_properties:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    pairs.append((str(item[0]), str(item[1])))
+            if pairs:
+                properties.UserProperty = pairs
+                changed = True
+        if changed:
+            return properties
+        return None
+
     def _on_connect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
         code = self._reason_code_to_int(reason_code)
         if code == 0:
@@ -239,6 +281,23 @@ class _FoxMqttClient:
             return
         if not isinstance(payload, dict):
             return
+        properties = getattr(message, "properties", None)
+        if properties is not None:
+            correlation_data = getattr(properties, "CorrelationData", None)
+            if isinstance(correlation_data, bytes):
+                payload["__correlation_data"] = correlation_data.decode("utf-8", errors="replace")
+            elif correlation_data is not None:
+                payload["__correlation_data"] = str(correlation_data)
+            response_topic = getattr(properties, "ResponseTopic", None)
+            if response_topic is not None:
+                payload["__response_topic"] = str(response_topic)
+            user_property = getattr(properties, "UserProperty", None)
+            if isinstance(user_property, list):
+                payload["__user_properties"] = [
+                    [str(item[0]), str(item[1])]
+                    for item in user_property
+                    if isinstance(item, (list, tuple)) and len(item) >= 2
+                ]
         sender = str(payload.get("_sender", ""))
         if sender and sender != self.node_id:
             self._known_peers[sender] = time.time()
@@ -258,15 +317,20 @@ class _FoxMqttClient:
 
     def subscribe(self, topic: str, callback: Callable[[Dict[str, Any]], None]) -> None:
         self._subscriptions.setdefault(topic, []).append(callback)
-        result = self._client.subscribe(topic, qos=1)
+        result = self._client.subscribe(topic, qos=self._subscribe_qos)
         if isinstance(result, tuple) and result:
             code = int(result[0])
             if code != 0:
                 raise RuntimeError(f"mqtt subscribe failed on topic {topic}, code={code}")
 
     def publish(self, topic: str, message: Dict[str, Any]) -> None:
-        payload = json.dumps(message, ensure_ascii=False)
-        info = self._client.publish(topic, payload, qos=1)
+        payload_body = dict(message)
+        publish_kwargs: Dict[str, Any] = {}
+        publish_properties = self._build_publish_properties(payload_body)
+        if publish_properties is not None:
+            publish_kwargs["properties"] = publish_properties
+        payload = json.dumps(payload_body, ensure_ascii=False)
+        info = self._client.publish(topic, payload, qos=self._publish_qos, **publish_kwargs)
         code = getattr(info, "rc", 0)
         if isinstance(code, int) and code != 0:
             raise RuntimeError(f"mqtt publish failed on topic {topic}, code={code}")
@@ -274,43 +338,39 @@ class _FoxMqttClient:
     def get_active_peers(self) -> List[str]:
         return sorted(self._known_peers.keys())
 
+    def backend_profile(self) -> Dict[str, str]:
+        return {
+            "mqtt_protocol": "5" if self._is_mqtt_v5 else "3.1.1",
+            "publish_qos": str(self._publish_qos),
+            "subscribe_qos": str(self._subscribe_qos),
+            "keepalive_seconds": str(self._keepalive),
+            "tls_enabled": "true" if self._parse_bool(os.getenv("FOXMQ_MQTT_TLS", "0")) else "false",
+        }
+
 
 class FoxMQAdapter:
     def __init__(
         self,
         node_id: Optional[str] = None,
         backend: Optional[str] = None,
-        bridge_cmd: Optional[str] = None,
         mqtt_addr: Optional[str] = None,
     ):
         self.node_id = node_id or f"node-{uuid.uuid4().hex[:8]}"
         self.peers: List[str] = []
         self._subscriptions: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
-        self._bridge_cmd = (bridge_cmd or "").strip()
         self._mqtt_addr = (mqtt_addr or "").strip()
         env_backend = os.getenv("FOXMQ_BACKEND", "mqtt")
         backend_value = backend if backend is not None else (env_backend if env_backend is not None else "mqtt")
         self.backend = backend_value.strip().lower()
-        if self.backend not in {"simulated", "official", "mqtt"}:
+        if self.backend not in {"simulated", "mqtt"}:
             raise ValueError(f"unsupported FoxMQ backend: {self.backend}")
         self._official_client: Optional[Any] = None
         self._official_module_name: Optional[str] = None
-        if self.backend == "official":
-            self._official_client, self._official_module_name = self._create_official_client()
         if self.backend == "mqtt":
             self._official_client, self._official_module_name = self._create_mqtt_client()
 
     _shared_bus: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
     _shared_peers: List[str] = []
-
-    def _create_official_client(self) -> Tuple[Any, str]:
-        bridge_cmd = self._bridge_cmd or os.getenv("VERTEX_RS_BRIDGE_CMD", "").strip()
-        if bridge_cmd:
-            return _VertexRsBridgeClient(bridge_cmd=bridge_cmd, node_id=self.node_id), f"vertex-rs:{bridge_cmd}"
-        raise RuntimeError(
-            "official FoxMQ backend requested but Rust bridge command is missing; "
-            "set FOXMQ_BACKEND=simulated or set VERTEX_RS_BRIDGE_CMD to a Rust bridge executable"
-        )
 
     def _create_mqtt_client(self) -> Tuple[Any, str]:
         mqtt_addr = self._mqtt_addr or os.getenv("FOXMQ_MQTT_ADDR", "127.0.0.1:1883").strip()
@@ -326,7 +386,7 @@ class FoxMQAdapter:
         return False
 
     def join_network(self, topic: str = "default") -> None:
-        if self.backend in {"official", "mqtt"}:
+        if self.backend == "mqtt":
             if self._official_client is None:
                 raise RuntimeError(f"{self.backend} FoxMQ client not initialized")
             joined = self._call_first(self._official_client, ("join_network", "join", "connect"), topic)
@@ -339,7 +399,7 @@ class FoxMQAdapter:
         logger.info(f"Node {self.node_id} joined network topic '{topic}'")
 
     def leave_network(self) -> None:
-        if self.backend in {"official", "mqtt"}:
+        if self.backend == "mqtt":
             if self._official_client is None:
                 return
             self._call_first(self._official_client, ("leave_network", "leave", "disconnect"))
@@ -349,8 +409,11 @@ class FoxMQAdapter:
             FoxMQAdapter._shared_peers.remove(self.node_id)
         logger.info(f"Node {self.node_id} left network")
 
+    def close(self) -> None:
+        self.leave_network()
+
     def subscribe(self, topic: str, callback: Callable[[Dict[str, Any]], None]) -> None:
-        if self.backend in {"official", "mqtt"}:
+        if self.backend == "mqtt":
             if self._official_client is None:
                 raise RuntimeError(f"{self.backend} FoxMQ client not initialized")
             subscribed = self._call_first(self._official_client, ("subscribe",), topic, callback)
@@ -368,7 +431,7 @@ class FoxMQAdapter:
         msg_with_meta["_sender"] = self.node_id
         msg_with_meta["_timestamp"] = time.time()
 
-        if self.backend in {"official", "mqtt"}:
+        if self.backend == "mqtt":
             if self._official_client is None:
                 raise RuntimeError(f"{self.backend} FoxMQ client not initialized")
             published = self._call_first(self._official_client, ("publish", "send", "broadcast"), topic, msg_with_meta)
@@ -387,7 +450,7 @@ class FoxMQAdapter:
         self.publish("global", message)
 
     def get_active_peers(self) -> List[str]:
-        if self.backend in {"official", "mqtt"}:
+        if self.backend == "mqtt":
             if self._official_client is None:
                 return []
             getter = getattr(self._official_client, "get_active_peers", None)
@@ -400,11 +463,16 @@ class FoxMQAdapter:
         return [p for p in FoxMQAdapter._shared_peers if p != self.node_id]
 
     def backend_info(self) -> Dict[str, str]:
-        return {
+        info = {
             "backend": self.backend,
             "module": self._official_module_name or "simulated",
             "node_id": self.node_id,
         }
+        profile_getter = getattr(self._official_client, "backend_profile", None)
+        if callable(profile_getter):
+            for key, value in dict(profile_getter()).items():
+                info[str(key)] = str(value)
+        return info
 
     @classmethod
     def reset_simulation(cls) -> None:

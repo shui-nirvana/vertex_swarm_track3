@@ -11,7 +11,6 @@ class ExternalAgentSDK:
         self,
         agent_id: str,
         backend: str = "mqtt",
-        bridge_cmd: str | None = None,
         mqtt_addr: str | None = None,
         fallback_to_simulated: bool = False,
         max_workers: int = 4,
@@ -22,7 +21,6 @@ class ExternalAgentSDK:
         transport = build_transport(
             node_id=agent_id,
             backend=backend,
-            bridge_cmd=bridge_cmd,
             mqtt_addr=mqtt_addr,
             fallback_to_simulated=fallback_to_simulated,
         )

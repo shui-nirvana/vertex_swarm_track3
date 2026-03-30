@@ -1,141 +1,161 @@
-# Vertex Swarm Lab - Track 3: Leaderless Swarm
+# Vertex Swarm Track3 (Leaderless Swarm)
 
-This repository implements **Vertex Swarm Challenge 2026 - Track 3**.
-It demonstrates a decentralized, leaderless swarm that coordinates tasks under contention, remains stable under faults, and produces verifiable coordination proofs without a central orchestrator.
+This repository is the current implementation of Vertex Swarm Challenge 2026 Track3. It focuses on:
 
-Recommended evaluation environment: Windows 10/11, Python 3.10+, and FoxMQ (for MQTT transport validation).
+- Coordinating Scout / Guardian / Verifier without a central orchestrator
+- Maintaining recoverability and verifiability under fault scenarios (delay/drop)
+- Producing auditable coordination artifacts (Vertex consensus proof, multisig output, structured event logs)
+
+The primary execution path is **FoxMQ MQTT clustered mode** (Windows + Python 3.10+).
+
+## Current Capabilities
+
+- Decentralized task coordination: publish, bidding, role assignment, execution, and verification through inter-agent messaging
+- Vertex consensus in production path: DAG event ordering with `ordered_event_ids` and proof checks
+- Lattice-aligned checks: discovery, authorized participants, independent validation, reputation routing, failover
+- Security and auditability: signature verification, anti-replay, anti-forgery, equivocation guard
+- Multi-process operation: independent agent processes + FoxMQ broker for end-to-end mission completion
+
+## Project Structure
+
+- `security_monitor/track3/`: Track3 entry and protocol flow (`main.py`, `protocol.py`)
+- `security_monitor/swarm/`: node model, messages, consensus, fault injection, Vertex engine
+- `security_monitor/coordination/`: coordination kernel and runtime
+- `security_monitor/roles/`: Scout / Guardian / Verifier role implementations
+- `security_monitor/integration/`: FoxMQ and settlement integrations
+- `security_monitor/tests/`: Track3 tests (including multi-process scenarios)
+- `start_foxmq.ps1`: local FoxMQ bootstrap script
+- `start_track3_with_mqtt.ps1`: one-click broker + agents + mission launcher
+
+## Requirements
+
+- Windows 10/11 (PowerShell 5+)
+- Python 3.10+
+- Local FoxMQ binary (default path: `tools/foxmq/v0.3.1/foxmq.exe`)
 
 FoxMQ references:
 
 - Docs: https://docs.tashi.network/resources/foxmq/quick-start-direct
 - Releases: https://github.com/tashigg/foxmq/releases
 
-## 60-Second Review
-
-- This project delivers a leaderless Track 3 swarm with deterministic task coordination and verifiable outputs.
-- Architecture uses orchestrator compatibility + decentralized agent-side plugin execution.
-- Transport backends support `simulated`, `mqtt`, and `official (Rust bridge path)`.
-- Core runtime includes plugin registry selection, timeout/retry, inflight backpressure, and task-state tracking.
-- Competition-ready path is MQTT: run `powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1`.
-- Success criterion is `acceptance_report.json` with all `criteria` fields equal to `true`.
-
-## Architecture Overview
-
-End-to-end flow:
-
-1. Task enters through compatibility entry or SDK dispatch
-2. Coordination kernel routes and tracks task state (`pending/routed/running/success/failed`)
-3. Agent runtime selects plugin by task metadata and executes with timeout/retry/backpressure controls
-4. Results are committed, signed, and exported as verifiable artifacts
-
-Core modules:
-
-- `security_monitor/coordination/`: coordination kernel + decentralized `AgentPluginRuntime`
-- `security_monitor/plugins/`: plugin protocol, registry, and built-in business plugins
-- `security_monitor/adapters/`: centralized compatibility adapter + external SDK facade
-- `security_monitor/integration/`: transport adapter (`simulated`, `mqtt`, `official`)
-- `security_monitor/scenarios/`: executable business scenarios (risk control, cross-org alert, etc.)
-- `security_monitor/track3/`: submission entry (`main.py`) and acceptance orchestration
-- `security_monitor/tests/`: e2e and integration tests
-
-## Feature Coverage
-
-- **Coordination correctness**
-  - Single-winner task assignment
-  - No double assignment under contention
-- **Resilience**
-  - Delay/drop fault injection
-  - Recovery and state resynchronization
-- **Security**
-  - Signed envelopes
-  - Replay rejection
-  - Commit equivocation guard
-- **Auditability**
-  - Structured event logs
-  - Coordination proofs and commit logs
-  - Offline verification pipeline
-- **Pluginized business execution**
-  - Metadata-driven plugin selection
-  - Agent-side execution without replacing incumbent orchestrators
-- **Runtime controls**
-  - Async execution pool
-  - Inflight backpressure
-  - Plugin timeout + retry
-  - Runtime metrics
-
 ## Quick Start
 
-### 1) Quick Demo
+### 1) Start FoxMQ
 
-```bash
-python -m security_monitor.track3.main
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_foxmq.ps1
 ```
 
-### 2) Acceptance (Simulated Backend)
+Default listeners:
 
-```bash
-python -m security_monitor.track3.main --mode acceptance --foxmq-backend simulated
+- MQTT: `127.0.0.1:1883`
+- Cluster: `127.0.0.1:19793`
+
+### 2) One-click Run (Recommended)
+
+Run agent bootstrap mission (auto-starts guardian / verifier, scout performs bootstrap):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1 -Mode agent-bootstrap
 ```
 
-### 3) MQTT Acceptance (Recommended for Competition Runs)
+Run internal acceptance bundle (none/delay/drop scenarios):
 
-One-click:
-
-```bash
-powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1 -Mode internal-acceptance
 ```
 
-Manual (broker already running):
+### 3) Manual Multi-process Run (4 terminals)
 
-```bash
-python -m security_monitor.track3.main --mode acceptance --foxmq-backend mqtt --foxmq-mqtt-addr 127.0.0.1:1883
+Start 2 resident agents first:
+
+```powershell
+python -m security_monitor.track3.main --mode agent-process --agent-id agent-guardian --foxmq-backend mqtt --foxmq-mqtt-addr 127.0.0.1:1883 --run-id demo001 --topic-namespace run-demo001
+python -m security_monitor.track3.main --mode agent-process --agent-id agent-verifier --foxmq-backend mqtt --foxmq-mqtt-addr 127.0.0.1:1883 --run-id demo001 --topic-namespace run-demo001
 ```
 
-## E2E and Full Case Execution
+Then start scout bootstrap mission (auto-exits on completion and writes mission report):
 
-### MQTT E2E (Single Test)
-
-```bash
-$env:MQTT_E2E="1"; $env:FOXMQ_MQTT_ADDR="127.0.0.1:1884"; python -m unittest security_monitor.tests.test_swarm_track3.Track3SwarmTests.test_mqtt_transport_demo_e2e -v
+```powershell
+python -m security_monitor.track3.main --mode agent-process --agent-id agent-scout --foxmq-backend mqtt --foxmq-mqtt-addr 127.0.0.1:1883 --run-id demo001 --topic-namespace run-demo001 --output-dir artifacts/track3 --bootstrap-mission --exit-on-mission-complete --bootstrap-ready-timeout-seconds 30 --bootstrap-wait-timeout-seconds 60
 ```
 
-### MQTT Full Track3 Cases
+## CLI Modes (`security_monitor.track3.main`)
 
-```bash
-$env:MQTT_E2E="1"; $env:FOXMQ_MQTT_ADDR="127.0.0.1:1883"; $env:OFFICIAL_E2E="0"; $env:OFFICIAL_MULTI_E2E="0"; python -m unittest security_monitor.tests.test_swarm_track3 -v
-```
+- `--mode internal-single`: single-process demo with `--fault none|delay|drop`
+- `--mode internal-acceptance`: runs acceptance bundle and writes `acceptance_report.json`
+- `--mode agent-process`: starts an independent agent process, optionally with `--bootstrap-mission`
 
-### Official Bridge E2E (Optional Integration Path)
+Common arguments:
 
-`official` backend is not the same as MQTT and requires `vertex-rs-bridge` executable.
+- `--foxmq-mqtt-addr 127.0.0.1:1883`
+- `--run-id <id>` with `--topic-namespace run-<id>` (recommended as a pair)
+- `--output-dir <dir>`
+- `--agent-capabilities scout,guardian,verifier`
 
-Single-port:
+## Outputs and Pass Criteria
 
-```bash
-$env:VERTEX_RS_BRIDGE_CMD="E:\tools\vertex\vertex-rs-bridge.exe --host 127.0.0.1 --port 1883 --stdio"; $env:OFFICIAL_E2E="1"; python -m unittest security_monitor.tests.test_swarm_track3.Track3SwarmTests.test_official_transport_demo_e2e -v
-```
+### internal-single / internal-acceptance
 
-Multi-port:
-
-```bash
-$env:VERTEX_RS_BRIDGE_CMD_TEMPLATE="E:\tools\vertex\vertex-rs-bridge.exe --host {host} --port {port} --stdio"; $env:OFFICIAL_MULTI_E2E="1"; python -m unittest security_monitor.tests.test_swarm_track3.Track3SwarmTests.test_official_transport_multi_port_loopback_e2e -v
-```
-
-## Outputs and Evidence
-
-Acceptance mode writes:
-
-- `artifacts/<run_name>/acceptance_report.json`
-- `artifacts/<run_name>/none|delay|drop/structured_event_log.json`
-- `artifacts/<run_name>/none|delay|drop/coordination_proof.json`
-- `artifacts/<run_name>/none|delay|drop/commit_log.json`
+- `artifacts/<run>/none|delay|drop/structured_event_log.json`
+- `artifacts/<run>/none|delay|drop/coordination_proof.json`
+- `artifacts/<run>/none|delay|drop/commit_log.json`
+- `artifacts/<run>/acceptance_report.json`
 
 Pass condition:
 
-- All fields in `criteria` are `true` in `acceptance_report.json`
+- All entries in `criteria` are `true` in `acceptance_report.json`
 
-Reference evidence:
+### agent bootstrap mission
 
-- MQTT hardened acceptance: `artifacts/competition_req_check/acceptance_mqtt_10_hardened/acceptance_report.json`
-- Official bridge acceptance: `artifacts/competition_req_check/acceptance_official_10_hardened/acceptance_report.json`
-- Simulated hardened baseline: `artifacts/competition_req_check/acceptance_simulated_10_hardened/acceptance_report.json`
+- `artifacts/<run>/multiprocess_mission_record.json`
+
+Key fields:
+
+- `all_success`
+- `role_identity_assignments`
+- `coordination_proof` (including `proof_payload`, `signatures/multisig_summary`)
+- `proof_checks`
+- `competition_alignment`
+- `lattice`
+- `standard_metrics`
+
+Pass condition:
+
+- `all_success=true` in `multiprocess_mission_record.json`
+
+## Testing and Quality Gates
+
+Set MQTT address first:
+
+```powershell
+$env:FOXMQ_MQTT_ADDR="127.0.0.1:1883"
+```
+
+Run Track3 tests:
+
+```powershell
+python -m unittest security_monitor.tests.test_swarm_track3 -v
+```
+
+Run Vertex consensus focused tests:
+
+```powershell
+python -m unittest security_monitor.tests.test_vertex_consensus -v
+```
+
+Run lint/type check:
+
+```powershell
+python -m ruff check .
+python -m mypy security_monitor
+```
+
+## FAQ
+
+- FoxMQ is not reachable
+  - Ensure `start_foxmq.ps1` is running and `127.0.0.1:1883` is reachable
+- Multi-process mission fails with `all_success=false`
+  - Inspect `failure_reason`, `readiness`, and `proof_checks` in `multiprocess_mission_record.json`
+- `python -m mypy` fails because of missing `agent_tmp`
+  - Use the repository-stable command: `python -m mypy security_monitor`

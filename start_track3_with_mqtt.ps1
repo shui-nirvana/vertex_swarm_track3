@@ -1,11 +1,15 @@
 param(
-    [string]$Version = "v0.3.0",
-    [string]$InstallDir = "artifacts\foxmq_runtime",
+    [string]$Version = "v0.3.1",
+    [string]$ToolsDir = "tools\foxmq",
     [string]$MqttAddr = "127.0.0.1:1883",
     [string]$ClusterAddr = "127.0.0.1:19793",
     [int]$Workers = 2,
-    [string]$OutputDir = "artifacts/acceptance_mqtt_latest",
+    [string]$OutputDir = "artifacts/agent_bootstrap_mqtt_latest",
+    [ValidateSet("agent-bootstrap", "internal-acceptance")]
+    [string]$Mode = "agent-bootstrap",
+    [string]$RunId = "",
     [switch]$KeepFoxMQ,
+    [switch]$KeepAgents,
     [switch]$AllowAnonymousLogin = $true
 )
 
@@ -21,7 +25,7 @@ $setupArgs = @(
     "-ExecutionPolicy", "Bypass",
     "-File", $startFoxmqScript,
     "-Version", $Version,
-    "-InstallDir", $InstallDir,
+    "-ToolsDir", $ToolsDir,
     "-MqttAddr", $MqttAddr,
     "-ClusterAddr", $ClusterAddr,
     "-NoRun"
@@ -32,7 +36,7 @@ if ($AllowAnonymousLogin) {
 
 & powershell @setupArgs
 
-$runtimeDir = Join-Path $repoRoot $InstallDir
+$runtimeDir = Join-Path (Join-Path $repoRoot $ToolsDir) $Version
 $foxmqExe = Join-Path $runtimeDir "foxmq.exe"
 $keyPath = Join-Path $runtimeDir "foxmq.d\key_0.pem"
 
@@ -54,6 +58,12 @@ if ($AllowAnonymousLogin) {
 }
 
 $foxmqProcess = Start-Process -FilePath $foxmqExe -ArgumentList $foxmqArgs -WorkingDirectory $runtimeDir -PassThru
+$agentProcesses = @()
+$resolvedRunId = $RunId
+if ([string]::IsNullOrWhiteSpace($resolvedRunId)) {
+    $resolvedRunId = [Guid]::NewGuid().ToString("N").Substring(0, 12)
+}
+$topicNamespace = "run-$resolvedRunId"
 
 try {
     $parts = $MqttAddr.Split(":")
@@ -82,9 +92,25 @@ try {
 
     Push-Location $repoRoot
     try {
-        & python -m security_monitor.track3.main --mode acceptance --workers $Workers --foxmq-backend mqtt --foxmq-mqtt-addr $MqttAddr --output-dir $OutputDir
-        if ($LASTEXITCODE -ne 0) {
-            throw "Track3 acceptance failed with exit code $LASTEXITCODE"
+        if ($Mode -eq "internal-acceptance") {
+            & python -m security_monitor.track3.main --mode internal-acceptance --workers $Workers --foxmq-backend mqtt --foxmq-mqtt-addr $MqttAddr --output-dir $OutputDir
+            if ($LASTEXITCODE -ne 0) {
+                throw "Track3 internal acceptance failed with exit code $LASTEXITCODE"
+            }
+        }
+        else {
+            $agentProcesses += Start-Process -FilePath "python" -ArgumentList @("-m", "security_monitor.track3.main", "--mode", "agent-process", "--agent-id", "agent-guardian", "--foxmq-backend", "mqtt", "--foxmq-mqtt-addr", $MqttAddr, "--run-id", $resolvedRunId, "--topic-namespace", $topicNamespace) -WorkingDirectory $repoRoot -PassThru
+            $agentProcesses += Start-Process -FilePath "python" -ArgumentList @("-m", "security_monitor.track3.main", "--mode", "agent-process", "--agent-id", "agent-verifier", "--foxmq-backend", "mqtt", "--foxmq-mqtt-addr", $MqttAddr, "--run-id", $resolvedRunId, "--topic-namespace", $topicNamespace) -WorkingDirectory $repoRoot -PassThru
+            Start-Sleep -Seconds 2
+            foreach ($proc in $agentProcesses) {
+                if ($null -ne $proc -and $proc.HasExited) {
+                    throw "agent process exited unexpectedly before mission run: pid=$($proc.Id)"
+                }
+            }
+            $bootstrap = Start-Process -FilePath "python" -ArgumentList @("-m", "security_monitor.track3.main", "--mode", "agent-process", "--agent-id", "agent-scout", "--foxmq-backend", "mqtt", "--foxmq-mqtt-addr", $MqttAddr, "--run-id", $resolvedRunId, "--topic-namespace", $topicNamespace, "--output-dir", $OutputDir, "--bootstrap-mission", "--exit-on-mission-complete", "--bootstrap-ready-timeout-seconds", "30", "--bootstrap-wait-timeout-seconds", "60") -WorkingDirectory $repoRoot -PassThru -Wait
+            if ($bootstrap.ExitCode -ne 0) {
+                throw "Track3 agent bootstrap mission failed with exit code $($bootstrap.ExitCode)"
+            }
         }
     }
     finally {
@@ -92,6 +118,20 @@ try {
     }
 }
 finally {
+    if (-not $KeepAgents) {
+        foreach ($proc in $agentProcesses) {
+            if ($null -ne $proc -and -not $proc.HasExited) {
+                Stop-Process -Id $proc.Id -Force
+            }
+        }
+    }
+    else {
+        foreach ($proc in $agentProcesses) {
+            if ($null -ne $proc) {
+                Write-Host "Agent remains running with PID $($proc.Id)"
+            }
+        }
+    }
     if (-not $KeepFoxMQ) {
         if ($null -ne $foxmqProcess -and -not $foxmqProcess.HasExited) {
             Stop-Process -Id $foxmqProcess.Id -Force

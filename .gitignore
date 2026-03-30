@@ -17,6 +17,8 @@ artifacts_acceptance/
 artifacts_drop/
 artifacts_*/
 tools/
+.foxmq/
+foxmq_single.d/
 
 
 
