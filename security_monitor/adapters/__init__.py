@@ -1,3 +1,5 @@
+"""Init module for Vertex Swarm Track3."""
+
 from security_monitor.adapters.agent_sdk import ExternalAgentSDK
 from security_monitor.adapters.autogen_adapter import AutoGenAgentAdapter
 from security_monitor.adapters.centralized_compat import OrchestratorCompatibilityAdapter

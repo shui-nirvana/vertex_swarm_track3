@@ -1,3 +1,5 @@
+"""Models module for Vertex Swarm Track3."""
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum

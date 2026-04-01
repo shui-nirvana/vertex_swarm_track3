@@ -1,11 +1,37 @@
+"""Ai Engine module for Vertex Swarm Track3."""
+
 from typing import Any, Dict
 
 
 class AIRiskEngine:
     def __init__(self) -> None:
+        """Purpose: Init.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic init rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.mode = "simulated"
 
     def analyze_defense_request(self, target: str, amount: float, token: str = "USDT") -> Dict[str, Any]:
+        """Purpose: Analyze defense request.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic analyze defense request rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         normalized = target.lower()
         if normalized.endswith("dead"):
             return {

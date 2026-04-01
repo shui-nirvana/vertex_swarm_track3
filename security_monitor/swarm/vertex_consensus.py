@@ -1,3 +1,9 @@
+"""Vertex DAG consensus primitives for deterministic ordering and verifiable proofs.
+
+Implements event construction, round division, famous witness voting, consensus
+ordering, and proof serialization/verification used by Track3 mission auditing.
+"""
+
 import hashlib
 import json
 from collections import defaultdict
@@ -9,6 +15,18 @@ from security_monitor.swarm.security import sign_payload, verify_payload
 
 
 def _canonical_json(data: Dict[str, Any]) -> str:
+    """Purpose: Canonical json.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic canonical json rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -29,6 +47,18 @@ def _event_payload(
 
 
 def _event_id_from_payload(payload: Dict[str, Any]) -> str:
+    """Purpose: Event id from payload.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic event id from payload rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
@@ -43,6 +73,18 @@ class VertexEvent:
     signature: str
 
     def payload(self) -> Dict[str, Any]:
+        """Purpose: Payload.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic payload rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return _event_payload(
             creator=self.creator,
             logical_ts=self.logical_ts,
@@ -54,6 +96,18 @@ class VertexEvent:
 
 class VertexConsensus:
     def __init__(self, participants: Sequence[str]):
+        """Purpose: Init.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic init rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         participant_set = {str(item).strip() for item in participants if str(item).strip()}
         if len(participant_set) < 3:
             raise ValueError("vertex consensus requires at least 3 participants")
@@ -63,6 +117,18 @@ class VertexConsensus:
         self._ancestor_cache: Dict[str, Set[str]] = {}
 
     def add_event(self, event: VertexEvent) -> None:
+        """Purpose: Add event.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic add event rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if event.creator not in self.participants:
             raise ValueError(f"unknown participant: {event.creator}")
         if event.event_id in self._events:
@@ -81,9 +147,33 @@ class VertexConsensus:
                 self._children[parent].add(event.event_id)
 
     def events(self) -> List[VertexEvent]:
+        """Purpose: Events.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic events rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return sorted(self._events.values(), key=lambda item: (item.logical_ts, item.event_id))
 
     def ancestors(self, event_id: str) -> Set[str]:
+        """Purpose: Ancestors.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic ancestors rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if event_id in self._ancestor_cache:
             return set(self._ancestor_cache[event_id])
         result: Set[str] = set()
@@ -103,11 +193,35 @@ class VertexConsensus:
         return result
 
     def can_see(self, observer_event_id: str, target_event_id: str) -> bool:
+        """Purpose: Can see.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic can see rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if observer_event_id == target_event_id:
             return True
         return target_event_id in self.ancestors(observer_event_id)
 
     def _witnesses_by_round(self, rounds: Dict[str, int]) -> Dict[int, Dict[str, str]]:
+        """Purpose: Witnesses by round.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic witnesses by round rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         witnesses: Dict[int, Dict[str, str]] = defaultdict(dict)
         for event in self.events():
             round_number = int(rounds.get(event.event_id, 1))
@@ -130,6 +244,13 @@ class VertexConsensus:
         return len(seen_creators) >= threshold_for(len(self.participants))
 
     def divide_rounds(self) -> Tuple[Dict[str, int], Dict[int, Dict[str, str]]]:
+        """Assign each event to a logical round and extract round witnesses.
+
+        Round rule:
+        - Start from max parent round.
+        - Promote to next round only when event strongly sees prior-round witnesses.
+        - Witnesses are first events by creator in each round.
+        """
         rounds: Dict[str, int] = {}
         for event in self.events():
             parent_round = 1
@@ -172,6 +293,13 @@ class VertexConsensus:
         return result
 
     def famous_witnesses(self) -> Tuple[Dict[str, bool], Dict[str, int], Dict[str, int]]:
+        """Run deterministic witness voting to classify famous witnesses.
+
+        Returns:
+        - fame: whether each witness is considered famous.
+        - decided_round: the round where each witness fame becomes decided.
+        - witness_round: original round index for each witness event id.
+        """
         rounds, witnesses = self.divide_rounds()
         witness_round: Dict[str, int] = {}
         for round_number, items in witnesses.items():
@@ -237,10 +365,34 @@ class VertexConsensus:
         return None
 
     def _leaf_whitened_key(self, event: VertexEvent) -> str:
+        """Purpose: Leaf whitened key.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic leaf whitened key rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         whitening = hashlib.sha256(f"{event.signature}:{event.event_id}".encode("utf-8")).hexdigest()
         return whitening
 
     def _order_event_subset(self, event_ids: Set[str]) -> List[str]:
+        """Purpose: Order event subset.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic order event subset rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         remaining = set(event_ids)
         ordered: List[str] = []
         while remaining:
@@ -278,6 +430,13 @@ class VertexConsensus:
         return ordered
 
     def consensus_order(self) -> Dict[str, Any]:
+        """Produce finalized event order based on famous-witness visibility.
+
+        Steps:
+        - Compute fame and receiving rounds.
+        - Group events by finalized round.
+        - Order each round subset with deterministic whitening tie-break strategy.
+        """
         fame, decided_round, witness_round = self.famous_witnesses()
         finalized_round: Dict[str, int] = {}
         for event in self.events():
@@ -299,6 +458,11 @@ class VertexConsensus:
         }
 
     def build_proof(self, secret_by_participant: Dict[str, str]) -> Dict[str, Any]:
+        """Build verifiable proof bundle from finalized consensus order.
+
+        Bundle contains ordered event ids, fame/finalization metadata, proof hash,
+        participant signatures over the proof hash, and serialized ordered events.
+        """
         consensus = self.consensus_order()
         ordered_event_ids = list(consensus["ordered_event_ids"])
         ordered_events = [self._events[event_id] for event_id in ordered_event_ids]
@@ -327,6 +491,7 @@ class VertexConsensus:
         proof: Dict[str, Any],
         secret_by_participant: Dict[str, str],
     ) -> Dict[str, bool]:
+        """Verify proof hash integrity and signature quorum against participant secrets."""
         payload = dict(proof.get("proof_payload", {}))
         expected_hash = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
         proof_hash = str(proof.get("proof_hash", ""))

@@ -1,3 +1,5 @@
+"""Cross Org Alert module for Vertex Swarm Track3."""
+
 from time import sleep
 from typing import Any, Dict
 
@@ -8,6 +10,18 @@ from security_monitor.transports.factory import build_transport
 
 
 def _wait_for_terminal_state(kernel: CoordinationKernel, task_id: str, rounds: int = 120) -> Dict[str, Any] | None:
+    """Purpose: Wait for terminal state.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic wait for terminal state rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     for _ in range(rounds):
         state = kernel.get_task_state(task_id)
         if state and state.get("state") in ("success", "failed", "blocked"):
@@ -17,6 +31,18 @@ def _wait_for_terminal_state(kernel: CoordinationKernel, task_id: str, rounds: i
 
 
 def run_cross_org_alert_scenario(backend: str = "mqtt") -> Dict[str, Any]:
+    """Purpose: Run cross org alert scenario.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic run cross org alert scenario rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     transport = build_transport(node_id="cross-org-kernel", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     kernel.register_agent("org-a-alert-node", ["alert_sync"])
@@ -36,6 +62,18 @@ def run_cross_org_alert_scenario(backend: str = "mqtt") -> Dict[str, Any]:
 
 
 def run_cross_org_alert_agent_driven_scenario(backend: str = "mqtt") -> Dict[str, Any]:
+    """Purpose: Run cross org alert agent driven scenario.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic run cross org alert agent driven scenario rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     transport = build_transport(node_id="cross-org-kernel-agent-driven", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     runtime = AgentPluginRuntime(

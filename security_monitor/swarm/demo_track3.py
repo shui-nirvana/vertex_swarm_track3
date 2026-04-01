@@ -1,3 +1,5 @@
+"""Demo Track3 module for Vertex Swarm Track3."""
+
 import argparse
 import os
 from typing import Literal, cast
@@ -6,6 +8,18 @@ from security_monitor.track3.protocol import run_acceptance, run_demo
 
 
 def main() -> int:
+    """Purpose: Main.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic main rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     parser = argparse.ArgumentParser(description="Track3 demo runner")
     parser.add_argument(
         "--mode",

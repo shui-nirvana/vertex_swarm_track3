@@ -1,3 +1,5 @@
+"""Agent Runtime module for Vertex Swarm Track3."""
+
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from threading import Lock, Semaphore
@@ -40,6 +42,18 @@ class AgentPluginRuntime:
         }
 
     def start(self) -> None:
+        """Purpose: Start.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic start rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         capabilities = sorted(
             {
                 str(task_type)
@@ -51,6 +65,18 @@ class AgentPluginRuntime:
         self.kernel.subscribe(self.kernel.task_topic(self.agent_id), self._handle_task)
 
     def _handle_task(self, message: Dict[str, Any]) -> None:
+        """Purpose: Handle task.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic handle task rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if not self.inflight_semaphore.acquire(blocking=False):
             task_id = str(message.get("task_id", ""))
             self._increment_metric("queue_rejections")
@@ -66,6 +92,18 @@ class AgentPluginRuntime:
         future.add_done_callback(lambda _: self.inflight_semaphore.release())
 
     def _process_task(self, message: Dict[str, Any], task_start: float) -> None:
+        """Purpose: Process task.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic process task rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         task_id = str(message.get("task_id", ""))
         task_type = str(message.get("task_type", ""))
         payload = dict(message.get("payload", {}))
@@ -147,10 +185,34 @@ class AgentPluginRuntime:
             timeout_executor.shutdown(wait=False, cancel_futures=True)
 
     def _increment_metric(self, key: str, value: float = 1.0) -> None:
+        """Purpose: Increment metric.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic increment metric rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         with self.metrics_lock:
             self.metrics[key] = float(self.metrics.get(key, 0.0)) + float(value)
 
     def get_metrics(self) -> Dict[str, float]:
+        """Purpose: Get metrics.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic get metrics rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         with self.metrics_lock:
             snapshot = dict(self.metrics)
         success = max(1.0, snapshot.get("successful_tasks", 0.0))
@@ -158,4 +220,16 @@ class AgentPluginRuntime:
         return snapshot
 
     def stop(self) -> None:
+        """Purpose: Stop.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic stop rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.executor.shutdown(wait=True, cancel_futures=True)

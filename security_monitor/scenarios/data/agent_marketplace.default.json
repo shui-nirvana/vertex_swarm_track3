@@ -1,0 +1,20 @@
+{
+  "scout_signal": "abnormal_bid_latency",
+  "evidence_hash": "agent-marketplace-proof-placeholder",
+  "transaction_id_prefix": "req",
+  "business_context": {
+    "scenario": "agent_marketplace_fullstack_delivery",
+    "asset": "USD",
+    "amount_usdt": 3250.0,
+    "velocity_1h": 9,
+    "wallet_age_days": 0,
+    "device_trust_score": 0.63,
+    "risk_score": 0.71,
+    "region": "us-west",
+    "blacklist_hits": 0,
+    "recommended_freeze_seconds": 300,
+    "bid_count": 6,
+    "target_sla_minutes": 45,
+    "expected_decision": "freeze_and_review"
+  }
+}

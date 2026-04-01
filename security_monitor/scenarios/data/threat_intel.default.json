@@ -1,0 +1,66 @@
+{
+  "scout_signal": "abnormal_lateral_movement",
+  "evidence_hash": "threat-intel-proof-placeholder",
+  "transaction_id_prefix": "ioc",
+  "business_context": {
+    "scenario": "threat_intel_lateral_movement",
+    "asset": "N/A",
+    "amount_usdt": 0.0,
+    "velocity_1h": 112,
+    "wallet_age_days": 0,
+    "device_trust_score": 0.24,
+    "risk_score": 0.89,
+    "region": "dc-east",
+    "blacklist_hits": 4,
+    "recommended_freeze_seconds": 600,
+    "ioc_count": 23,
+    "affected_nodes": 7,
+    "consensus_target": 3,
+    "assessment_resource_units": 2,
+    "assessment_budget_ceiling": 20.0,
+    "mitigation_resource_units": 3,
+    "mitigation_budget_ceiling": 45.0,
+    "verification_resource_units": 1,
+    "verification_budget_ceiling": 25.0,
+    "playbook_id": "pb-lateral-high",
+    "rollback_confidence_threshold": 0.45,
+    "force_rollback": false,
+    "monitoring_window_minutes": 30,
+    "residual_risk_threshold": 0.55,
+    "secondary_verify_required": true,
+    "intel_sources": [
+      {
+        "source_id": "edr-01",
+        "trust_score": 0.92,
+        "freshness": 0.88,
+        "claim": "lateral_movement",
+        "evidence_hash": "edr-evt-001"
+      },
+      {
+        "source_id": "ids-02",
+        "trust_score": 0.84,
+        "freshness": 0.79,
+        "claim": "credential_abuse",
+        "evidence_hash": "ids-evt-023"
+      },
+      {
+        "source_id": "threat-feed-77",
+        "trust_score": 0.73,
+        "freshness": 0.91,
+        "claim": "lateral_movement",
+        "evidence_hash": "feed-evt-778"
+      }
+    ],
+    "attack_hints": ["lateral", "credential_access"],
+    "monitored_nodes": [
+      "edge-gw-01",
+      "edge-gw-02",
+      "api-node-03",
+      "api-node-04",
+      "db-proxy-01",
+      "batch-worker-09",
+      "vpn-gateway-02"
+    ],
+    "expected_decision": "freeze_and_review"
+  }
+}

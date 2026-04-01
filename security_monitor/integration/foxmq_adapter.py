@@ -1,3 +1,5 @@
+"""Foxmq Adapter module for Vertex Swarm Track3."""
+
 import hashlib
 import json
 import logging
@@ -12,6 +14,18 @@ logger = logging.getLogger(__name__)
 
 class _FoxMqttClient:
     def __init__(self, mqtt_addr: str, node_id: str, timeout_seconds: float = 3.0):
+        """Purpose: Init.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic init rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.node_id = node_id
         self._subscriptions: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
         self._known_peers: Dict[str, float] = {}
@@ -124,6 +138,18 @@ class _FoxMqttClient:
 
     @staticmethod
     def _build_client_id(node_id: str) -> str:
+        """Purpose: Build client id.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic build client id rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         raw = f"foxmq-{node_id}"
         compact = "".join(ch for ch in raw if ch.isalnum() or ch in {"-", "_"})
         if not compact:
@@ -136,6 +162,18 @@ class _FoxMqttClient:
 
     @staticmethod
     def _parse_mqtt_addr(mqtt_addr: str) -> Tuple[str, int]:
+        """Purpose: Parse mqtt addr.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic parse mqtt addr rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         value = mqtt_addr.strip()
         if not value:
             raise RuntimeError("FOXMQ_MQTT_ADDR is empty")
@@ -157,6 +195,18 @@ class _FoxMqttClient:
 
     @staticmethod
     def _reason_code_to_int(reason_code: Any) -> int:
+        """Purpose: Reason code to int.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic reason code to int rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if isinstance(reason_code, int):
             return reason_code
         value = getattr(reason_code, "value", None)
@@ -169,11 +219,35 @@ class _FoxMqttClient:
 
     @staticmethod
     def _parse_bool(raw: Any) -> bool:
+        """Purpose: Parse bool.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic parse bool rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         value = str(raw).strip().lower()
         return value in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _parse_qos(raw: Any, default: int) -> int:
+        """Purpose: Parse qos.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic parse qos rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         try:
             parsed = int(str(raw).strip())
         except Exception:
@@ -186,6 +260,18 @@ class _FoxMqttClient:
 
     @staticmethod
     def _parse_keepalive(raw: Any, default: int) -> int:
+        """Purpose: Parse keepalive.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic parse keepalive rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         try:
             parsed = int(str(raw).strip())
         except Exception:
@@ -196,6 +282,18 @@ class _FoxMqttClient:
 
     @staticmethod
     def _parse_int(raw: Any, default: int, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+        """Purpose: Parse int.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic parse int rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         try:
             parsed = int(str(raw).strip())
         except Exception:
@@ -207,6 +305,18 @@ class _FoxMqttClient:
         return parsed
 
     def _build_connect_properties(self) -> Optional[Any]:
+        """Purpose: Build connect properties.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic build connect properties rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if not self._is_mqtt_v5:
             return None
         properties_cls = getattr(self._mqtt, "Properties", None)
@@ -226,6 +336,18 @@ class _FoxMqttClient:
         return None
 
     def _build_publish_properties(self, message: Dict[str, Any]) -> Optional[Any]:
+        """Purpose: Build publish properties.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic build publish properties rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if not self._is_mqtt_v5:
             return None
         properties_cls = getattr(self._mqtt, "Properties", None)
@@ -266,6 +388,18 @@ class _FoxMqttClient:
         return None
 
     def _on_connect(self, _client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any = None) -> None:
+        """Purpose: On connect.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic on connect rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         code = self._reason_code_to_int(reason_code)
         if code == 0:
             self._connected.set()
@@ -274,6 +408,18 @@ class _FoxMqttClient:
         self._connected.set()
 
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
+        """Purpose: On message.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic on message rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         try:
             payload = json.loads(message.payload.decode("utf-8"))
         except Exception:
@@ -309,13 +455,49 @@ class _FoxMqttClient:
                 logger.error(f"mqtt callback failed on {message.topic}: {exc}")
 
     def join_network(self, topic: str) -> None:
+        """Purpose: Join network.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic join network rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         _ = topic
 
     def leave_network(self) -> None:
+        """Purpose: Leave network.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic leave network rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self._client.loop_stop()
         self._client.disconnect()
 
     def subscribe(self, topic: str, callback: Callable[[Dict[str, Any]], None]) -> None:
+        """Purpose: Subscribe.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic subscribe rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self._subscriptions.setdefault(topic, []).append(callback)
         result = self._client.subscribe(topic, qos=self._subscribe_qos)
         if isinstance(result, tuple) and result:
@@ -324,6 +506,18 @@ class _FoxMqttClient:
                 raise RuntimeError(f"mqtt subscribe failed on topic {topic}, code={code}")
 
     def publish(self, topic: str, message: Dict[str, Any]) -> None:
+        """Purpose: Publish.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic publish rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         payload_body = dict(message)
         publish_kwargs: Dict[str, Any] = {}
         publish_properties = self._build_publish_properties(payload_body)
@@ -336,9 +530,33 @@ class _FoxMqttClient:
             raise RuntimeError(f"mqtt publish failed on topic {topic}, code={code}")
 
     def get_active_peers(self) -> List[str]:
+        """Purpose: Get active peers.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic get active peers rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return sorted(self._known_peers.keys())
 
     def backend_profile(self) -> Dict[str, str]:
+        """Purpose: Backend profile.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic backend profile rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return {
             "mqtt_protocol": "5" if self._is_mqtt_v5 else "3.1.1",
             "publish_qos": str(self._publish_qos),
@@ -373,11 +591,35 @@ class FoxMQAdapter:
     _shared_peers: List[str] = []
 
     def _create_mqtt_client(self) -> Tuple[Any, str]:
+        """Purpose: Create mqtt client.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic create mqtt client rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         mqtt_addr = self._mqtt_addr or os.getenv("FOXMQ_MQTT_ADDR", "127.0.0.1:1883").strip()
         return _FoxMqttClient(mqtt_addr=mqtt_addr, node_id=self.node_id), f"mqtt:{mqtt_addr}"
 
     @staticmethod
     def _call_first(target: Any, method_names: Tuple[str, ...], *args: Any, **kwargs: Any) -> bool:
+        """Purpose: Call first.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic call first rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         for method_name in method_names:
             method = getattr(target, method_name, None)
             if callable(method):
@@ -386,6 +628,18 @@ class FoxMQAdapter:
         return False
 
     def join_network(self, topic: str = "default") -> None:
+        """Purpose: Join network.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic join network rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if self.backend == "mqtt":
             if self._official_client is None:
                 raise RuntimeError(f"{self.backend} FoxMQ client not initialized")
@@ -399,6 +653,18 @@ class FoxMQAdapter:
         logger.info(f"Node {self.node_id} joined network topic '{topic}'")
 
     def leave_network(self) -> None:
+        """Purpose: Leave network.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic leave network rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if self.backend == "mqtt":
             if self._official_client is None:
                 return
@@ -410,9 +676,33 @@ class FoxMQAdapter:
         logger.info(f"Node {self.node_id} left network")
 
     def close(self) -> None:
+        """Purpose: Close.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic close rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.leave_network()
 
     def subscribe(self, topic: str, callback: Callable[[Dict[str, Any]], None]) -> None:
+        """Purpose: Subscribe.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic subscribe rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if self.backend == "mqtt":
             if self._official_client is None:
                 raise RuntimeError(f"{self.backend} FoxMQ client not initialized")
@@ -427,6 +717,18 @@ class FoxMQAdapter:
         logger.debug(f"Node {self.node_id} subscribed to {topic}")
 
     def publish(self, topic: str, message: Dict[str, Any]) -> None:
+        """Purpose: Publish.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic publish rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         msg_with_meta = message.copy()
         msg_with_meta["_sender"] = self.node_id
         msg_with_meta["_timestamp"] = time.time()
@@ -447,9 +749,33 @@ class FoxMQAdapter:
                     logger.error(f"Error processing message on topic {topic}: {e}")
 
     def broadcast(self, message: Dict[str, Any]) -> None:
+        """Purpose: Broadcast.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic broadcast rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.publish("global", message)
 
     def get_active_peers(self) -> List[str]:
+        """Purpose: Get active peers.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic get active peers rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if self.backend == "mqtt":
             if self._official_client is None:
                 return []
@@ -463,6 +789,18 @@ class FoxMQAdapter:
         return [p for p in FoxMQAdapter._shared_peers if p != self.node_id]
 
     def backend_info(self) -> Dict[str, str]:
+        """Purpose: Backend info.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic backend info rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         info = {
             "backend": self.backend,
             "module": self._official_module_name or "simulated",
@@ -476,5 +814,17 @@ class FoxMQAdapter:
 
     @classmethod
     def reset_simulation(cls) -> None:
+        """Purpose: Reset simulation.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic reset simulation rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         cls._shared_bus = {}
         cls._shared_peers = []

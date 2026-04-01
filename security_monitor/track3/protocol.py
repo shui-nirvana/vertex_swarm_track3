@@ -1,3 +1,10 @@
+"""Track3 mission protocol orchestration and acceptance evaluation helpers.
+
+This module builds demo/acceptance flows by wiring agents, transport, consensus,
+and settlement adapters, then exports KPIs and proof-aligned artifacts used by
+competition-style validation.
+"""
+
 import json
 import os
 import statistics
@@ -61,6 +68,12 @@ class AcceptanceSummary(TypedDict):
 
 
 def _percentile_ms(samples: List[float], ratio: float) -> float:
+    """Compute a stable percentile value for latency/KPI reporting.
+
+    Notes:
+    - Returns -1.0 for empty samples so callers can detect missing metrics.
+    - Uses deterministic index rounding to keep report values reproducible.
+    """
     if not samples:
         return -1.0
     if len(samples) == 1:
@@ -76,6 +89,13 @@ def _vertex_finalize_winner(
     active_members: List[str],
     bids: List[Dict[str, Any]],
 ) -> Tuple[str, Dict[str, Any], Dict[str, Any], Dict[str, bool]]:
+    """Finalize winner selection from bids using Vertex consensus ordering.
+
+    Flow:
+    - Normalize participants and bid set (including fallback synthetic bids when needed).
+    - Build Vertex claim/sync events, generate proof payload, and verify proof locally.
+    - Choose the first claim creator in consensus order as winner (or deterministic fallback).
+    """
     participants = sorted({str(member).strip() for member in active_members if str(member).strip()})
     if len(participants) < 3:
         raise RuntimeError(f"vertex consensus requires >=3 participants, got {participants}")
@@ -219,11 +239,13 @@ class FoxSwarmNetwork(SwarmNetwork):
         self.fox_mq.join_network("swarm-control")
 
     def broadcast(self, envelope: Dict[str, Any]) -> None:
+        """Broadcast through local swarm bus and mirror the event to FoxMQ topic."""
         super().broadcast(envelope)
         self.fox_mq.publish("swarm-events", envelope)
 
 
 def _create_agents(network: SwarmNetwork, worker_count: int = 2) -> Tuple[ScoutAgent, List[AgentNode]]:
+    """Create scout/guardian/verifier nodes with deterministic identities and capabilities."""
     scout = ScoutAgent(
         agent_id="agent-scout",
         capability="scout",
@@ -286,6 +308,11 @@ def run_demo(
     foxmq_backend: str = "mqtt",
     foxmq_mqtt_addr: Optional[str] = None,
 ) -> DemoSummary:
+    """Run a single Track3 mission scenario and export proof-aligned demo artifacts.
+
+    Scenario includes discovery, bidding, settlement, consensus finalization, and
+    result verification under selected fault mode (none/delay/drop).
+    """
     if str(foxmq_backend).strip().lower() == "simulated":
         raise ValueError("simulated backend is disabled; use foxmq_backend='mqtt'")
     injector = FaultInjector()
@@ -790,6 +817,11 @@ def run_acceptance(
     foxmq_backend: str = "mqtt",
     foxmq_mqtt_addr: Optional[str] = None,
 ) -> AcceptanceSummary:
+    """Run all acceptance scenarios and aggregate criteria/KPI summaries.
+
+    Executes the demo in none/delay/drop modes, then composes competition-aligned
+    criteria booleans plus a consolidated acceptance report JSON.
+    """
     if str(foxmq_backend).strip().lower() == "simulated":
         raise ValueError("simulated backend is disabled; use foxmq_backend='mqtt'")
     scenarios: Dict[str, DemoSummary] = {}

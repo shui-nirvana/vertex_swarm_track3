@@ -1,0 +1,20 @@
+{
+  "scout_signal": "abnormal_gpu_claim",
+  "evidence_hash": "compute-marketplace-proof-placeholder",
+  "transaction_id_prefix": "gpu",
+  "business_context": {
+    "scenario": "compute_marketplace_gpu_allocation",
+    "asset": "USD",
+    "amount_usdt": 1800.0,
+    "velocity_1h": 21,
+    "wallet_age_days": 0,
+    "device_trust_score": 0.44,
+    "risk_score": 0.82,
+    "region": "ap-southeast",
+    "blacklist_hits": 1,
+    "recommended_freeze_seconds": 480,
+    "requested_gpu_hours": 64,
+    "max_unit_price": 2.4,
+    "expected_decision": "freeze_and_review"
+  }
+}

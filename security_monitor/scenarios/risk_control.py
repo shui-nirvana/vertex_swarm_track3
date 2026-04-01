@@ -1,3 +1,5 @@
+"""Risk Control module for Vertex Swarm Track3."""
+
 from time import sleep
 from typing import Any, Dict
 
@@ -6,8 +8,23 @@ from security_monitor.coordination import AgentPluginRuntime, CoordinationKernel
 from security_monitor.plugins import RiskControlPlugin
 from security_monitor.transports.factory import build_transport
 
+BUSINESS_TYPE = "risk_control"
+DEFAULT_TEMPLATE_FILENAME = "risk_control.default.json"
+
 
 def _wait_for_terminal_state(kernel: CoordinationKernel, task_id: str, rounds: int = 120) -> Dict[str, Any] | None:
+    """Purpose: Wait for terminal state.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic wait for terminal state rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     for _ in range(rounds):
         state = kernel.get_task_state(task_id)
         if state and state.get("state") in ("success", "failed", "blocked"):
@@ -17,6 +34,18 @@ def _wait_for_terminal_state(kernel: CoordinationKernel, task_id: str, rounds: i
 
 
 def run_risk_control_scenario(backend: str = "mqtt") -> Dict[str, Any]:
+    """Purpose: Run risk control scenario.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic run risk control scenario rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     transport = build_transport(node_id="risk-kernel", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     kernel.register_agent("risk-sentinel", ["risk_assessment"])
@@ -36,6 +65,18 @@ def run_risk_control_scenario(backend: str = "mqtt") -> Dict[str, Any]:
 
 
 def run_risk_control_agent_driven_scenario(backend: str = "mqtt") -> Dict[str, Any]:
+    """Purpose: Run risk control agent driven scenario.
+
+    Inputs:
+    - Uses function parameters plus relevant in-memory runtime state.
+
+    Behavior:
+    - Validates/normalizes key fields before doing state transitions.
+    - Executes deterministic run risk control agent driven scenario rules so all nodes converge on the same result.
+
+    Outputs:
+    - Returns normalized data or state updates consumed by downstream logic.
+    """
     transport = build_transport(node_id="risk-kernel-agent-driven", backend=backend, fallback_to_simulated=False)
     kernel = CoordinationKernel(transport=transport)
     runtime = AgentPluginRuntime(

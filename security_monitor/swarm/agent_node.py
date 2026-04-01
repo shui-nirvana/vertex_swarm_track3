@@ -1,3 +1,5 @@
+"""Agent Node module for Vertex Swarm Track3."""
+
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -41,10 +43,34 @@ class AgentNode:
     _nonce: int = 0
 
     def _next_nonce(self) -> str:
+        """Purpose: Next nonce.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic next nonce rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self._nonce += 1
         return f"{self.agent_id}-{self._nonce}"
 
     def _build_envelope(self, message_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Purpose: Build envelope.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic build envelope rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         envelope = {
             "type": message_type,
             "sender": self.agent_id,
@@ -63,10 +89,34 @@ class AgentNode:
         return envelope
 
     def _broadcast(self, message_type: str, payload: Dict[str, Any]) -> None:
+        """Purpose: Broadcast.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic broadcast rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         envelope = self._build_envelope(message_type, payload)
         self.network.broadcast(envelope)
 
     def discover(self) -> None:
+        """Purpose: Discover.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic discover rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self._broadcast(
             DISCOVER,
             {
@@ -75,6 +125,18 @@ class AgentNode:
         )
 
     def heartbeat(self) -> None:
+        """Purpose: Heartbeat.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic heartbeat rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self._broadcast(
             HEARTBEAT,
             {
@@ -83,12 +145,36 @@ class AgentNode:
         )
 
     def cleanup_peers(self, ttl_seconds: float = 10.0) -> None:
+        """Purpose: Cleanup peers.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic cleanup peers rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         now = time.time()
         stale = [peer_id for peer_id, last_seen in self.peers.items() if now - last_seen > ttl_seconds]
         for peer_id in stale:
             self.peers.pop(peer_id, None)
 
     def offer_task(self, task_id: str, mission: str, budget_ceiling: float, constraints: Optional[Dict[str, Any]] = None) -> None:
+        """Purpose: Offer task.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic offer task rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         payload = {
             "task_id": task_id,
             "mission": mission,
@@ -132,6 +218,18 @@ class AgentNode:
         return members
 
     def _maybe_bid(self, offer: Dict[str, Any]) -> None:
+        """Purpose: Maybe bid.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic maybe bid rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if self.is_planner:
             return
         constraints = dict(offer.get("constraints", {}))
@@ -157,6 +255,18 @@ class AgentNode:
         self._broadcast(BID, bid_payload)
 
     def assign_task_winner(self, task_id: str, winner_agent_id: str) -> None:
+        """Purpose: Assign task winner.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic assign task winner rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         task_key = str(task_id).strip()
         winner = str(winner_agent_id).strip()
         if not task_key or not winner:
@@ -164,6 +274,18 @@ class AgentNode:
         self.committed_winner_by_task[task_key] = winner
 
     def execute_committed_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Purpose: Execute committed task.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic execute committed task rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         winner = self.committed_winner_by_task.get(task_id)
         if winner != self.agent_id:
             return None
@@ -190,6 +312,18 @@ class AgentNode:
         return result
 
     def emit_verify_ack(self, task_id: str, event_hash: str) -> None:
+        """Purpose: Emit verify ack.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic emit verify ack rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self._broadcast(
             VERIFY_ACK,
             {
@@ -214,6 +348,18 @@ class AgentNode:
         )
 
     def receive(self, envelope: Dict[str, Any]) -> None:
+        """Purpose: Receive.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic receive rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if not self.active:
             return
         message_type = str(envelope["type"])
@@ -277,6 +423,18 @@ class AgentNode:
 
 class SwarmNetwork:
     def __init__(self, fault_injector: Optional[FaultInjector] = None):
+        """Purpose: Init.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic init rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.nodes: Dict[str, AgentNode] = {}
         self.agent_secrets: Dict[str, str] = {}
         self.events: List[EventRecord] = []
@@ -284,24 +442,96 @@ class SwarmNetwork:
         self.partitioned_nodes: set[str] = set()
 
     def register(self, node: AgentNode) -> None:
+        """Purpose: Register.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic register rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.nodes[node.agent_id] = node
         self.agent_secrets[node.agent_id] = node.secret
 
     def active_node_ids(self) -> List[str]:
+        """Purpose: Active node ids.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic active node ids rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return [node_id for node_id, node in self.nodes.items() if node.active and not self.fault_injector.is_node_dropped(node_id)]
 
     def drop_node(self, node_id: str) -> None:
+        """Purpose: Drop node.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic drop node rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.fault_injector.dropped_nodes.add(node_id)
 
     def isolate_node(self, node_id: str) -> None:
+        """Purpose: Isolate node.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic isolate node rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if node_id not in self.nodes:
             return
         self.partitioned_nodes.add(node_id)
 
     def recover_node(self, node_id: str) -> None:
+        """Purpose: Recover node.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic recover node rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.partitioned_nodes.discard(node_id)
 
     def restart_node(self, node_id: str) -> None:
+        """Purpose: Restart node.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic restart node rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         node = self.nodes.get(node_id)
         if node is None:
             return
@@ -324,6 +554,18 @@ class SwarmNetwork:
         )
 
     def sync_hive_memory(self, source_node_id: str, target_node_ids: Optional[List[str]] = None) -> None:
+        """Purpose: Sync hive memory.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic sync hive memory rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         source_node = self.nodes.get(source_node_id)
         if source_node is None:
             return
@@ -352,11 +594,35 @@ class SwarmNetwork:
                 self.nodes[target_id].receive(envelope)
 
     def _is_partition_blocked(self, sender: str, receiver: str) -> bool:
+        """Purpose: Is partition blocked.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic is partition blocked rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if sender == receiver:
             return False
         return sender in self.partitioned_nodes or receiver in self.partitioned_nodes
 
     def broadcast(self, envelope: Dict[str, Any]) -> None:
+        """Purpose: Broadcast.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic broadcast rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         sender = str(envelope["sender"])
         if self.fault_injector.is_node_dropped(sender):
             return

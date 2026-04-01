@@ -1,3 +1,5 @@
+"""Messages module for Vertex Swarm Track3."""
+
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -32,6 +34,18 @@ class EventRecord:
     payload: Dict[str, Any]
 
     def to_dict(self) -> Dict[str, Any]:
+        """Purpose: To dict.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic to dict rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return {
             "ts": self.ts,
             "actor": self.actor,

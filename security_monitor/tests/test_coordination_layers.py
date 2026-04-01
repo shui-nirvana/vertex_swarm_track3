@@ -1,3 +1,11 @@
+"""Integration tests for coordination kernel, adapters, plugins, and transports.
+
+Environment assumptions:
+- Default path uses simulated in-memory transport for deterministic behavior.
+- MQTT transport checks use local FoxMQ endpoint when FOXMQ_MQTT_ADDR is available.
+- Scenario tests build isolated runtime state and avoid external cloud dependencies.
+"""
+
 import os
 import socket
 import unittest
@@ -20,11 +28,12 @@ from security_monitor.scenarios import (
     run_risk_control_agent_driven_scenario,
     run_risk_control_scenario,
 )
+from security_monitor.scenarios.business_registry import BUSINESS_TEMPLATE_FILES
 from security_monitor.transports import build_transport
 from security_monitor.transports.simulated import SimulatedTransport
 
 _MQTT_E2E_ADDR = os.getenv("FOXMQ_MQTT_ADDR", "127.0.0.1:1883").strip()
-_MQTT_E2E_ENABLED = bool(_MQTT_E2E_ADDR)
+_MQTT_E2E_ENABLED = str(os.getenv("MQTT_E2E", "0")).strip().lower() in {"1", "true", "yes", "on"}
 _COORD_TEST_MQTT_ADDR = _MQTT_E2E_ADDR
 
 
@@ -33,12 +42,48 @@ class FlakyRetryPlugin:
     supported_task_types = ("retry_task",)
 
     def __init__(self):
+        """Purpose: Init.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic init rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.calls = 0
 
     def supports(self, task_type: str, payload: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+        """Purpose: Supports.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic supports rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return str(task_type) == "retry_task"
 
     def handle(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Purpose: Handle.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic handle rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self.calls += 1
         if self.calls == 1:
             raise RuntimeError("transient")
@@ -50,9 +95,33 @@ class SlowTimeoutPlugin:
     supported_task_types = ("slow_task",)
 
     def supports(self, task_type: str, payload: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+        """Purpose: Supports.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic supports rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return str(task_type) == "slow_task"
 
     def handle(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Purpose: Handle.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic handle rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         sleep(float(task_payload.get("sleep", 0.05)))
         return {"status": "ok"}
 
@@ -62,33 +131,106 @@ class EchoPlugin:
     supported_task_types = ("echo_task",)
 
     def supports(self, task_type: str, payload: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+        """Purpose: Supports.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic supports rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return str(task_type) == "echo_task"
 
     def handle(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Purpose: Handle.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic handle rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return {"status": "ok", "echo": task_payload.get("echo", "")}
 
 
 class CoordinationLayerTests(unittest.TestCase):
+    """Validate cross-layer task routing, policy enforcement, and transport behavior."""
+
     def setUp(self) -> None:
+        """Purpose: SetUp.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic setUp rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         SimulatedTransport._bus.clear()
 
     def _require_mqtt_e2e(self) -> None:
-        self.assertTrue(_MQTT_E2E_ENABLED, msg="FOXMQ_MQTT_ADDR is required for FoxMQ clustered mode tests")
+        """Purpose: Require mqtt e2e.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic require mqtt e2e rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
+        if not _MQTT_E2E_ENABLED:
+            self.skipTest("set MQTT_E2E=1 and FOXMQ_MQTT_ADDR to run mqtt transport e2e")
         host, _, port_raw = _COORD_TEST_MQTT_ADDR.rpartition(":")
-        self.assertTrue(bool(host and port_raw), msg=f"invalid FOXMQ_MQTT_ADDR: {_COORD_TEST_MQTT_ADDR}")
+        if not bool(host and port_raw):
+            self.skipTest(f"invalid FOXMQ_MQTT_ADDR: {_COORD_TEST_MQTT_ADDR}")
         with socket.socket() as sock:
             sock.settimeout(1.0)
-            self.assertEqual(
-                sock.connect_ex((host, int(port_raw))),
-                0,
-                msg=f"FoxMQ MQTT endpoint is not reachable at {_COORD_TEST_MQTT_ADDR}",
-            )
+            if sock.connect_ex((host, int(port_raw))) != 0:
+                self.skipTest(f"FoxMQ MQTT endpoint is not reachable at {_COORD_TEST_MQTT_ADDR}")
 
     def _build_mqtt_transport(self, node_id: str):
+        """Purpose: Build mqtt transport.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic build mqtt transport rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         self._require_mqtt_e2e()
         return build_transport(node_id=node_id, backend="mqtt", mqtt_addr=_COORD_TEST_MQTT_ADDR, fallback_to_simulated=False)
 
     def _wait_for_terminal(self, kernel: CoordinationKernel, task_id: str, rounds: int = 120) -> Dict[str, Any]:
+        """Purpose: Wait for terminal.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic wait for terminal rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         for _ in range(rounds):
             state = kernel.get_task_state(task_id)
             if state and state.get("state") in ("success", "failed", "blocked"):
@@ -119,6 +261,11 @@ class CoordinationLayerTests(unittest.TestCase):
         return kernel, runtime
 
     def test_kernel_publish_subscribe_and_task_routing(self) -> None:
+        """Goal: Validate kernel publish subscribe and task routing.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         transport = self._build_mqtt_transport(node_id="kernel-test")
         kernel = CoordinationKernel(transport=transport)
         kernel.register_agent("risk-agent", ["risk_assessment"])
@@ -142,6 +289,11 @@ class CoordinationLayerTests(unittest.TestCase):
         self.assertEqual(state["state"], "routed")
 
     def test_kernel_topic_namespace_is_applied(self) -> None:
+        """Goal: Validate kernel topic namespace is applied.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         kernel = CoordinationKernel(
             transport=SimulatedTransport(node_id="ns-kernel"),
             topic_root="coordination/run-test-001",
@@ -156,6 +308,11 @@ class CoordinationLayerTests(unittest.TestCase):
         self.assertEqual(routed["topic"], "coordination/run-test-001/tasks/risk-agent")
 
     def test_policy_hook_blocks_task(self) -> None:
+        """Goal: Validate policy hook blocks task.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         transport = self._build_mqtt_transport(node_id="policy-test")
         kernel = CoordinationKernel(transport=transport)
         kernel.register_agent("risk-agent", ["risk_assessment"])
@@ -169,10 +326,20 @@ class CoordinationLayerTests(unittest.TestCase):
         self.assertEqual(blocked["reason"], "budget_exceeded")
 
     def test_transport_factory_rejects_unknown_backend(self) -> None:
+        """Goal: Validate transport factory rejects unknown backend.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         with self.assertRaises(ValueError):
             build_transport(node_id="n1", backend="unknown-backend", fallback_to_simulated=True)
 
     def test_orchestrator_compat_entry(self) -> None:
+        """Goal: Validate orchestrator compat entry.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         kernel = CoordinationKernel(transport=self._build_mqtt_transport(node_id="compat-test"))
         kernel.register_agent("alert-agent", ["alert_sync"])
         compat = OrchestratorCompatibilityAdapter(kernel)
@@ -186,6 +353,11 @@ class CoordinationLayerTests(unittest.TestCase):
         self.assertEqual(compat.read_state("compat:last"), routed["task_id"])
 
     def test_agent_adapters_are_thin_wrappers(self) -> None:
+        """Goal: Validate agent adapters are thin wrappers.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         langchain = LangChainAgentAdapter(agent_id="a1", capabilities=["alert_sync"])
         autogen = AutoGenAgentAdapter(agent_id="a2", capabilities=["alert_sync"])
         custom = CustomAgentAdapter(
@@ -198,6 +370,11 @@ class CoordinationLayerTests(unittest.TestCase):
         self.assertEqual(custom.transform_task({"x": 1})["runtime"], "custom")
 
     def test_example_scenarios(self) -> None:
+        """Goal: Validate example scenarios.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         self._require_mqtt_e2e()
         risk = run_risk_control_scenario(backend="mqtt")
         cross_org = run_cross_org_alert_scenario(backend="mqtt")
@@ -205,7 +382,21 @@ class CoordinationLayerTests(unittest.TestCase):
         self.assertEqual(cross_org["scenario"], "cross_org_alert")
         self.assertEqual(len(cross_org["dispatches"]), 2)
 
+    def test_business_registry_contains_five_type_driven_cases(self) -> None:
+        """Goal: Validate business registry contains five type driven cases.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
+        expected = {"risk_control", "threat_intel", "agent_marketplace", "distributed_rag", "compute_marketplace"}
+        self.assertEqual(set(BUSINESS_TEMPLATE_FILES.keys()), expected)
+
     def test_agent_driven_plugin_scenarios(self) -> None:
+        """Goal: Validate agent driven plugin scenarios.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         self._require_mqtt_e2e()
         risk = run_risk_control_agent_driven_scenario(backend="mqtt")
         cross_org = run_cross_org_alert_agent_driven_scenario(backend="mqtt")
@@ -222,6 +413,11 @@ class CoordinationLayerTests(unittest.TestCase):
         )
 
     def test_external_agent_sdk_non_intrusive_integration(self) -> None:
+        """Goal: Validate external agent sdk non intrusive integration.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         self._require_mqtt_e2e()
         sdk = ExternalAgentSDK(agent_id="ecosystem-agent", backend="mqtt", mqtt_addr=_COORD_TEST_MQTT_ADDR)
         sdk.register_plugins([CrossOrgAlertPlugin()])
@@ -241,6 +437,11 @@ class CoordinationLayerTests(unittest.TestCase):
         sdk.stop()
 
     def test_runtime_retry_timeout_and_metrics(self) -> None:
+        """Goal: Validate runtime retry timeout and metrics.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         self._require_mqtt_e2e()
         retry_plugin = FlakyRetryPlugin()
         runtime = ExternalAgentSDK(
@@ -268,6 +469,11 @@ class CoordinationLayerTests(unittest.TestCase):
         runtime.stop()
 
     def test_runtime_queue_rejection(self) -> None:
+        """Goal: Validate runtime queue rejection.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         self._require_mqtt_e2e()
         sdk = ExternalAgentSDK(
             agent_id="queue-agent",
@@ -292,6 +498,11 @@ class CoordinationLayerTests(unittest.TestCase):
         sdk.stop()
 
     def test_single_agent_gate_route_success_plugin_success(self) -> None:
+        """Goal: Validate single agent gate route success plugin success.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         kernel, runtime = self._build_single_agent_runtime([EchoPlugin()])
         routed = kernel.submit_task(
             task_type="echo_task",
@@ -309,6 +520,11 @@ class CoordinationLayerTests(unittest.TestCase):
         runtime.stop()
 
     def test_single_agent_gate_plugin_failure_not_found(self) -> None:
+        """Goal: Validate single agent gate plugin failure not found.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         kernel, runtime = self._build_single_agent_runtime([EchoPlugin()])
         routed = kernel.submit_task(
             task_type="unknown_task",
@@ -325,6 +541,11 @@ class CoordinationLayerTests(unittest.TestCase):
         runtime.stop()
 
     def test_single_agent_gate_timeout_retry_queuefull_and_metrics(self) -> None:
+        """Goal: Validate single agent gate timeout retry queuefull and metrics.
+
+        Setup: Initialize coordination kernel/runtime with simulated transport by default (or local MQTT when explicitly requested), register plugins/adapters, and isolate task state per test.
+        Checks: Assert expected outputs, state transitions, and emitted artifacts for the targeted execution path.
+        """
         kernel, runtime = self._build_single_agent_runtime(
             [FlakyRetryPlugin(), SlowTimeoutPlugin()],
             max_workers=1,

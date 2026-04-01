@@ -1,3 +1,10 @@
+"""Unit tests for Vertex DAG consensus ordering and proof verification.
+
+Environment assumptions:
+- Pure in-memory consensus engine (no external broker/process dependencies).
+- Deterministic participant identities and secrets for reproducible signatures.
+"""
+
 import unittest
 from typing import Dict, List
 
@@ -5,7 +12,21 @@ from security_monitor.swarm.vertex_consensus import VertexConsensus, make_vertex
 
 
 class VertexConsensusTests(unittest.TestCase):
+    """Validate round division, famous witnesses, order stability, and tamper checks."""
+
     def _build_engine(self) -> tuple[VertexConsensus, Dict[str, str], List[str]]:
+        """Purpose: Build engine.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic build engine rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         participants = ["agent-a", "agent-b", "agent-c", "agent-d"]
         secrets = {item: f"secret-{item}" for item in participants}
         engine = VertexConsensus(participants)
@@ -44,6 +65,11 @@ class VertexConsensusTests(unittest.TestCase):
         return engine, secrets, event_ids
 
     def test_divide_rounds_and_famous_witnesses(self) -> None:
+        """Goal: Validate divide rounds and famous witnesses.
+
+        Setup: Construct a deterministic in-memory Vertex DAG with fixed participants/secrets and no external broker/process dependencies.
+        Checks: Assert round/witness derivation, consensus ordering, and proof verification/tamper detection remain deterministic.
+        """
         engine, _, _ = self._build_engine()
         rounds, witnesses = engine.divide_rounds()
         self.assertGreaterEqual(max(rounds.values()), 2)
@@ -54,6 +80,11 @@ class VertexConsensusTests(unittest.TestCase):
         self.assertTrue(all(round_number >= witness_round[witness_id] for witness_id, round_number in decided_round.items()))
 
     def test_consensus_order_preserves_self_parent_order(self) -> None:
+        """Goal: Validate consensus order preserves self parent order.
+
+        Setup: Construct a deterministic in-memory Vertex DAG with fixed participants/secrets and no external broker/process dependencies.
+        Checks: Assert round/witness derivation, consensus ordering, and proof verification/tamper detection remain deterministic.
+        """
         engine, _, event_ids = self._build_engine()
         ordering = engine.consensus_order()
         ordered_event_ids = list(ordering["ordered_event_ids"])
@@ -66,6 +97,11 @@ class VertexConsensusTests(unittest.TestCase):
                 self.assertLess(position[event.self_parent], position[event_id])
 
     def test_proof_verification_and_tamper_detection(self) -> None:
+        """Goal: Validate proof verification and tamper detection.
+
+        Setup: Construct a deterministic in-memory Vertex DAG with fixed participants/secrets and no external broker/process dependencies.
+        Checks: Assert round/witness derivation, consensus ordering, and proof verification/tamper detection remain deterministic.
+        """
         engine, secrets, _ = self._build_engine()
         proof = engine.build_proof(secrets)
         checks = VertexConsensus.verify_proof(proof, secrets)

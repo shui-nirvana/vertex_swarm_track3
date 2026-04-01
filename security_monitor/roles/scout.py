@@ -1,3 +1,5 @@
+"""Scout module for Vertex Swarm Track3."""
+
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict
@@ -17,6 +19,18 @@ class ScoutAgent(AgentNode):
     ai_engine: AIRiskEngine = field(default_factory=AIRiskEngine)
     
     def __post_init__(self):
+        """Purpose: Post init.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic post init rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         # Override capability
         self.capability = "scout"
 
@@ -65,6 +79,18 @@ class ScoutAgent(AgentNode):
         return requirement
 
     def propose_business_task(self, requirement: Dict[str, Any]) -> bool:
+        """Purpose: Propose business task.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic propose business task rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         if not bool(requirement.get("accepted", False)):
             return False
         self.offer_task(

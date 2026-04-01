@@ -1,0 +1,18 @@
+{
+  "scout_signal": "abnormal_withdraw",
+  "evidence_hash": "proof-chain-placeholder",
+  "transaction_id_prefix": "tx",
+  "business_context": {
+    "scenario": "risk_control_high_velocity_withdrawal",
+    "asset": "USDT",
+    "amount_usdt": 48250.75,
+    "velocity_1h": 17,
+    "wallet_age_days": 3,
+    "device_trust_score": 0.18,
+    "risk_score": 0.93,
+    "region": "SG",
+    "blacklist_hits": 2,
+    "recommended_freeze_seconds": 900,
+    "expected_decision": "freeze_and_review"
+  }
+}

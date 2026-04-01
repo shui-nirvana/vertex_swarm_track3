@@ -1,3 +1,5 @@
+"""Verifier module for Vertex Swarm Track3."""
+
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict
@@ -15,6 +17,18 @@ class VerifierAgent(AgentNode):
     """
     
     def __post_init__(self):
+        """Purpose: Post init.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic post init rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         # Override capability
         self.capability = "verifier"
 

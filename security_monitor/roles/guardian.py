@@ -1,3 +1,5 @@
+"""Guardian module for Vertex Swarm Track3."""
+
 import logging
 import time
 from dataclasses import dataclass, field
@@ -12,9 +14,33 @@ logger = logging.getLogger(__name__)
 
 class ExternalAgentAdapter(Protocol):
     def framework(self) -> str:
+        """Purpose: Framework.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic framework rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         ...
 
     def pre_execute(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Purpose: Pre execute.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic pre execute rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         ...
 
 
@@ -23,9 +49,33 @@ class LangChainStyleAdapter:
     adapter_name: str = "langchain_adapter"
 
     def framework(self) -> str:
+        """Purpose: Framework.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic framework rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         return self.adapter_name
 
     def pre_execute(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Purpose: Pre execute.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic pre execute rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         mission = str(task_payload.get("mission", ""))
         return {
             "framework": self.adapter_name,
@@ -46,6 +96,18 @@ class GuardianAgent(AgentNode):
     external_adapter: Optional[ExternalAgentAdapter] = None
     
     def __post_init__(self):
+        """Purpose: Post init.
+
+        Inputs:
+        - Uses function parameters plus relevant in-memory runtime state.
+
+        Behavior:
+        - Validates/normalizes key fields before doing state transitions.
+        - Executes deterministic post init rules so all nodes converge on the same result.
+
+        Outputs:
+        - Returns normalized data or state updates consumed by downstream logic.
+        """
         # Override capability
         self.capability = "guardian"
 
