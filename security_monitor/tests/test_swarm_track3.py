@@ -925,7 +925,9 @@ class Track3SwarmTests(unittest.TestCase):
         bootstrap_returncode = int(bootstrap_proc.returncode or 0)
         self.assertEqual(bootstrap_returncode, 0, msg=f"stdout={bootstrap_stdout}\nstderr={bootstrap_stderr}")
         report_path = os.path.join(output_dir, "multiprocess_mission_record.json")
+        economy_rounds_path = os.path.join(output_dir, "economy_rounds.json")
         self.assertTrue(os.path.exists(report_path))
+        self.assertTrue(os.path.exists(economy_rounds_path))
         with open(report_path, "r", encoding="utf-8") as f:
             report = json.load(f)
         return report
@@ -1005,6 +1007,19 @@ class Track3SwarmTests(unittest.TestCase):
         coordination_proof = dict(report.get("coordination_proof", {}))
         signatures = dict(coordination_proof.get("multisig_summary", {}))
         self.assertEqual(set(signatures.keys()), set(expected_assignments.values()))
+        economy_summary = dict(report.get("economy_summary", {}))
+        self.assertIn("round_count", economy_summary)
+        self.assertIn("avg_candidate_count", economy_summary)
+        self.assertGreaterEqual(int(economy_summary.get("round_count", 0) or 0), 0)
+        economy_rounds = list(report.get("economy_rounds", []))
+        for row in economy_rounds:
+            item = dict(row)
+            winner = dict(item.get("winner", {}))
+            self.assertTrue(str(winner.get("selection_reason", "")).strip())
+            candidates = list(item.get("candidates", []))
+            self.assertGreaterEqual(len(candidates), 1)
+            first_candidate = dict(candidates[0]) if candidates else {}
+            self.assertIn("breakdown", first_candidate)
 
     @unittest.skipUnless(
         _MULTIPROCESS_E2E_ENABLED,
@@ -1180,6 +1195,16 @@ class Track3SwarmTests(unittest.TestCase):
             self.assertIn("end_to_end_latency_ms", report["standard_metrics"])
             self.assertIn("retry_count", report["standard_metrics"])
             self.assertIn("timeout_count", report["standard_metrics"])
+            for item in flow_log:
+                payload = dict(item.get("task_payload", {}))
+                self.assertTrue(payload)
+            economy_rounds = list(report.get("economy_rounds", []))
+            if economy_rounds:
+                first_round = dict(economy_rounds[0])
+                candidates = list(first_round.get("candidates", []))
+                if candidates:
+                    candidate = dict(candidates[0])
+                    self.assertIn("breakdown", candidate)
 
     @unittest.skipUnless(
         _MULTIPROCESS_E2E_ENABLED,

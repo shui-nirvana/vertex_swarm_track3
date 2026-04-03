@@ -5,6 +5,12 @@
 Vertex Swarm Lab is a decentralized coordination runtime for security monitoring workflows.  
 It uses FoxMQ (MQTT) for transport and Vertex DAG proofing for auditable, tamper-evident execution.
 
+## TL;DR
+
+- Leaderless multi-agent coordination over FoxMQ MQTT.
+- Verifiable mission execution with proof and structured audit artifacts.
+- Resilient operation validated under normal, delay, and drop scenarios.
+
 ## Why This Project
 
 - Fully decentralized multi-agent coordination without a central orchestrator
@@ -12,6 +18,12 @@ It uses FoxMQ (MQTT) for transport and Vertex DAG proofing for auditable, tamper
 - Verifiable execution with signatures, proof checks, and mission artifacts
 - Resilience validation with delay/drop fault scenarios
 - Optional observability layer for demo and debugging only
+
+## Operational Focus
+
+- Core objective: business-stage closure with auditable evidence (`mission_record + proof + event_log`) under leaderless coordination.
+- Execution model: role-governed pipeline (`Scout → Guardian → Verifier`) with domain semantics (`risk_control` / `threat_intel`).
+- Decision transparency is built into assignment outputs so operator-side reviews can trace why each role winner was selected.
 
 ## Diagram 1: System Module Interaction (Static Architecture)
 
@@ -94,20 +106,21 @@ sequenceDiagram
     V->>B: proof write event
 ```
 
-## Repository Map (Scanned)
+### Decision Traceability
 
-- `security_monitor/track3/`: runtime entrypoint and protocol orchestration
-- `security_monitor/coordination/`: coordination kernel, task lifecycle, plugin runtime
-- `security_monitor/transports/`: transport abstraction and FoxMQ MQTT transport
-- `security_monitor/integration/`: FoxMQ adapter, AI engine, settlement integration
-- `security_monitor/plugins/`: business plugins (`risk_control`, `threat_intel`, `verification`, `cross_org_alert`)
-- `security_monitor/swarm/`: Vertex consensus, security/signing, fault injection, message model
-- `security_monitor/scenarios/`: business templates and registries
-- `security_monitor/roles/`: role-oriented agent implementations
-- `security_monitor/panel/`: runtime panel API + rendering
-- `security_monitor/tests/`: unit, integration, consensus, panel, and E2E tests
-- `start_foxmq.ps1`: broker bootstrap
-- `start_track3_with_mqtt.ps1`: one-command run/test entry
+- Role claims include `economy_score_breakdown` so each assignment has score-level explainability.
+- Winner records include `selection_reason` to make deterministic role selection auditable.
+- Per-intent snapshots are persisted in `economy_rounds` with candidate data and budget/units rejection counters.
+- Mission-level aggregation is persisted in `economy_summary` and exported via `artifacts/.../economy_rounds.json`.
+
+## Core Modules
+
+- `security_monitor/track3/`: runtime entrypoint and protocol orchestration.
+- `security_monitor/coordination/`: kernel, task lifecycle, plugin runtime, role negotiation.
+- `security_monitor/swarm/`: Vertex consensus, signing/security, fault injection, message model.
+- `security_monitor/plugins/`: business plugins (`risk_control`, `threat_intel`, `verification`, `cross_org_alert`).
+- `security_monitor/panel/`: observability API and visualization for demo/debug.
+- `security_monitor/tests/`: unit, integration, consensus, panel, and E2E coverage.
 
 ## Currently Supported Business Types
 
@@ -133,6 +146,12 @@ Default business type: `risk_control`.
 | S5    | Verifier | Final closure or rollback confirmation       | Mission complete + proof checks       |
 
 ## Single-Machine Cluster Demo Quick Start
+
+Demo in 3 steps:
+
+- Start FoxMQ broker.
+- Start local runtime cluster.
+- Open panel and trigger a business flow.
 
 ### 1) Start local FoxMQ
 
@@ -216,7 +235,14 @@ Typical outputs:
 - `artifacts/.../multiprocess_mission_record.json`
 - `artifacts/.../coordination_proof.json`
 - `artifacts/.../structured_event_log.json`
+- `artifacts/.../economy_rounds.json`
 - `artifacts/.../acceptance_report.json`
+
+Minimum demo evidence:
+
+- `multiprocess_mission_record.json` for end-to-end mission closure.
+- `coordination_proof.json` for verifiable coordination proof.
+- `structured_event_log.json` for timestamped execution trace.
 
 Key fields:
 
@@ -226,6 +252,8 @@ Key fields:
 - `coordination_proof`
 - `proof_checks`
 - `standard_metrics`
+- `selection_reason`
+- `economy_summary`
 
 ## Quality Gates
 

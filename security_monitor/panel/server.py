@@ -508,6 +508,7 @@ def _build_agent_panels(record: MissionRecord, local_agent_id: str) -> list[dict
                     "role_assignments": role_assignment_summary,
                     "assigned_roles": assigned_roles,
                     "proof_checks": proof_checks,
+                    "economy_summary": _as_dict(_as_dict(record.payload).get("economy_summary")),
                     "current_layer": _safe_text(overview.get("current_layer")),
                     "current_stage": _safe_text(overview.get("current_stage")),
                     "mission_complete": bool(payload.get("mission_complete")),
@@ -526,6 +527,14 @@ def _build_overview(record: MissionRecord) -> dict[str, Any]:
     stages = _build_stage_status(record)
     stage_summary = _build_stage_summary(stages)
     stage_failure = _build_stage_failure_summary(record)
+    economy_summary = _as_dict(payload.get("economy_summary"))
+    if not economy_summary:
+        economy_summary = {
+            "round_count": 0,
+            "avg_candidate_count": 0.0,
+            "total_rejected_by_budget": 0,
+            "total_rejected_by_units": 0,
+        }
     return {
         "mission_id": record.mission_id,
         "run_id": record.run_id,
@@ -539,6 +548,7 @@ def _build_overview(record: MissionRecord) -> dict[str, Any]:
         "current_stage": _current_stage(stages),
         "stage_summary": stage_summary,
         "stage_failure": stage_failure,
+        "economy_summary": economy_summary,
         "all_success": bool(payload.get("all_success")),
         "mission_complete": bool(payload.get("mission_complete")),
         "step_count": len(list(payload.get("steps", []))),
@@ -2099,11 +2109,16 @@ def _panel_html(initial_agent_columns_html: str) -> str:
         const businessType = String(runtimeBusinessType || currentBusinessType || overviewBusinessType || '');
         const businessName = businessNameByType(businessType);
         const runName = String(overview.run_id || '-');
+        const economySummary = (overview && typeof overview.economy_summary === 'object' && overview.economy_summary) ? overview.economy_summary : {};
+        const economyRounds = Number(economySummary.round_count || 0);
+        const economyAvgCandidates = Number(economySummary.avg_candidate_count || 0);
+        const economyRejectedBudget = Number(economySummary.total_rejected_by_budget || 0);
+        const economyRejectedUnits = Number(economySummary.total_rejected_by_units || 0);
         const totalRuntimeEvents = Array.isArray(lastRuntimeEventsPayload.events) ? lastRuntimeEventsPayload.events.length : 0;
         const panelCount = Array.isArray(agentPanels.agent_panels) ? agentPanels.agent_panels.length : 0;
         const holder = document.getElementById('agentColumns');
         const renderedCount = holder ? holder.querySelectorAll('.agent-col').length : 0;
-        document.getElementById('refreshStatus').textContent = `Status: OK | run: ${runName} | business: ${businessName} | stage: ${String(overview.current_stage || '-')} | panel_agents: ${panelCount} | displayed_agents: ${renderedCount} | realtime_events: ${totalRuntimeEvents} | updated_at: ${updatedText} | failures: ${refreshErrorCount}`;
+        document.getElementById('refreshStatus').textContent = `Status: OK | run: ${runName} | business: ${businessName} | stage: ${String(overview.current_stage || '-')} | economy_rounds: ${economyRounds} | avg_candidates: ${economyAvgCandidates.toFixed(2)} | rejected_budget: ${economyRejectedBudget} | rejected_units: ${economyRejectedUnits} | panel_agents: ${panelCount} | displayed_agents: ${renderedCount} | realtime_events: ${totalRuntimeEvents} | updated_at: ${updatedText} | failures: ${refreshErrorCount}`;
       } catch (err) {
         refreshErrorCount += 1;
         const msg = String((err && err.message) ? err.message : err || 'unknown_error');

@@ -315,11 +315,83 @@ def _run_agent_process(
                     "steps": {},
                     "reported": False,
                     "completed": False,
+                    "economy_rounds": [],
                     "pre_guardian_delay_seconds": float(base_payload.get("pre_guardian_delay_seconds", 0.0))
                     if base_payload
                     else 0.0,
                 }
             return mission_states[mission_id]
+
+    def _build_economy_score_breakdown(
+        *,
+        score: float,
+        task_load: float,
+        preferred_bonus: float,
+        tie_break: float,
+        bid_price: float,
+        available_units: int,
+        required_units: int,
+        budget_ceiling: float,
+    ) -> Dict[str, Any]:
+        base_capability = 1000.0
+        load_penalty = task_load * 100.0
+        return {
+            "model": "current_v1_non_intrusive",
+            "final_score": round(score, 6),
+            "weights": {
+                "capability": 1.0,
+                "reputation": 0.0,
+                "latency_penalty": 1.0,
+                "price_penalty": 0.0,
+                "availability_bonus": 0.0,
+            },
+            "components": {
+                "capability_score": round(base_capability + preferred_bonus + tie_break, 6),
+                "reputation_score": 0.0,
+                "latency_penalty": round(-load_penalty, 6),
+                "price_penalty": 0.0,
+                "availability_bonus": 0.0,
+            },
+            "raw_inputs": {
+                "load": round(task_load, 6),
+                "price": round(bid_price, 6),
+                "available_units": int(available_units),
+                "required_units": int(required_units),
+                "budget_ceiling": float(budget_ceiling),
+            },
+        }
+
+    def _append_economy_round(mission_id: str, entry: Dict[str, Any]) -> None:
+        state = get_mission_state(mission_id)
+        with mission_states_lock:
+            rounds = list(state.get("economy_rounds", []))
+            rounds.append(dict(entry))
+            state["economy_rounds"] = rounds
+
+    def _economy_summary(state: Dict[str, Any]) -> Dict[str, Any]:
+        rounds = list(state.get("economy_rounds", []))
+        if not rounds:
+            return {
+                "round_count": 0,
+                "avg_candidate_count": 0.0,
+                "total_rejected_by_budget": 0,
+                "total_rejected_by_units": 0,
+            }
+        candidate_count_sum = 0
+        rejected_budget_sum = 0
+        rejected_units_sum = 0
+        for item in rounds:
+            row = dict(item) if isinstance(item, dict) else {}
+            candidate_count_sum += int(row.get("candidate_count", 0) or 0)
+            rejected = dict(row.get("rejected", {}))
+            rejected_budget_sum += int(rejected.get("by_budget", 0) or 0)
+            rejected_units_sum += int(rejected.get("by_units", 0) or 0)
+        return {
+            "round_count": int(len(rounds)),
+            "avg_candidate_count": round(candidate_count_sum / float(len(rounds)), 3),
+            "total_rejected_by_budget": int(rejected_budget_sum),
+            "total_rejected_by_units": int(rejected_units_sum),
+        }
 
     def on_result(message: Dict[str, Any]) -> None:
         """Cache task result-stream events by task id for local wait loops."""
@@ -430,7 +502,7 @@ def _run_agent_process(
         role_name: str,
         claim_kind: str,
         by_agent: Dict[str, Dict[str, Any]],
-    ) -> tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, Dict[str, Any], str]:
         """Select a deterministic winner for role claims.
 
         Decision path:
@@ -441,7 +513,7 @@ def _run_agent_process(
           ordering so all nodes still converge on the same winner.
         """
         if not by_agent:
-            return "", {}
+            return "", {}, "no_candidates"
         if claim_kind == "role_identity_claim":
             ranked = sorted(
                 by_agent.items(),
@@ -452,7 +524,7 @@ def _run_agent_process(
                 ),
             )
             winner_agent = str(ranked[0][0]).strip()
-            return winner_agent, dict(by_agent.get(winner_agent, {}))
+            return winner_agent, dict(by_agent.get(winner_agent, {})), "max_score_then_min_load_then_agent_id"
         candidates = sorted(by_agent.keys())
         participants = sorted(set(candidates) | set(_known_role_agents(role_name)))
         if len(participants) < 3:
@@ -462,7 +534,7 @@ def _run_agent_process(
                     f"{mission_id}:{role_name}:{claim_kind}:{item}".encode("utf-8")
                 ).hexdigest(),
             )
-            return winner_agent, dict(by_agent.get(winner_agent, {}))
+            return winner_agent, dict(by_agent.get(winner_agent, {})), "hash_fallback_low_quorum"
         vertex_engine = VertexConsensus(participants)
         creator_last_event: Dict[str, str] = {}
         event_ids: list[str] = []
@@ -533,14 +605,14 @@ def _run_agent_process(
         for event_id in ordered_event_ids:
             selected_creator = claim_event_creator.get(str(event_id))
             if selected_creator:
-                return selected_creator, dict(by_agent.get(selected_creator, {}))
+                return selected_creator, dict(by_agent.get(selected_creator, {})), "vertex_consensus_order"
         winner_agent = min(
             candidates,
             key=lambda item: hashlib.sha256(
                 f"{mission_id}:{role_name}:{claim_kind}:{item}".encode("utf-8")
             ).hexdigest(),
         )
-        return winner_agent, dict(by_agent.get(winner_agent, {}))
+        return winner_agent, dict(by_agent.get(winner_agent, {})), "hash_fallback_empty_consensus_order"
 
     def build_mission_chain(mission_id: str, completion_event: Dict[str, Any]) -> list[Dict[str, Any]]:
         """Build the canonical step chain used for proof/report generation.
@@ -791,6 +863,8 @@ def _run_agent_process(
             state = get_mission_state(mission_id)
             with mission_states_lock:
                 role_assignments = dict(state.get("role_assignments", {}))
+                economy_rounds = [dict(item) for item in list(state.get("economy_rounds", []))]
+                economy_summary = _economy_summary(state)
             selected_agent_by_role = {
                 str(step.get("role_name", "")).strip().lower(): str(step.get("selected_agent", "")).strip()
                 for step in chain
@@ -835,6 +909,8 @@ def _run_agent_process(
                 "duration_ms": round((finished_at - bootstrap_started_at).total_seconds() * 1000.0, 3),
                 "readiness": readiness,
                 "mission_payload": mission_payload,
+                "economy_summary": economy_summary,
+                "economy_rounds": economy_rounds,
                 "steps": chain,
                 "business_flow_log": business_flow_log,
                 "step_metrics": step_metrics,
@@ -871,6 +947,9 @@ def _run_agent_process(
             }
             with open(report_path, "w", encoding="utf-8") as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
+            economy_rounds_path = os.path.join(output_dir, "economy_rounds.json")
+            with open(economy_rounds_path, "w", encoding="utf-8") as f:
+                json.dump({"mission_id": mission_id, "run_id": run_id, "rounds": economy_rounds}, f, ensure_ascii=False, indent=2)
             bootstrap_report_written = True
             print(f"MISSION RECORD WRITTEN: {report_path}")
 
@@ -1377,7 +1456,7 @@ def _run_agent_process(
         by_agent = _dedupe_claims_by_agent(claims)
         if not by_agent:
             return
-        winner_agent, winner_claim = _vertex_pick_winner(
+        winner_agent, winner_claim, winner_selection_reason = _vertex_pick_winner(
             mission_id=mission_id,
             role_name=role_name,
             claim_kind="role_identity_claim",
@@ -1396,6 +1475,7 @@ def _run_agent_process(
                 "assigned_agent": winner_agent,
                 "score": float(winner_claim.get("score", 0.0)),
                 "load": float(winner_claim.get("load", 0.0)),
+                "selection_reason": winner_selection_reason,
                 "attempt": attempt,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
@@ -1605,7 +1685,7 @@ def _run_agent_process(
                 },
             )
             return
-        winner_agent, winner_claim = _vertex_pick_winner(
+        winner_agent, winner_claim, winner_selection_reason = _vertex_pick_winner(
             mission_id=mission_id,
             role_name=role_name,
             claim_kind="role_intent_claim",
@@ -1616,6 +1696,48 @@ def _run_agent_process(
         if winner_agent != agent_id:
             return
         selected_price = _as_float(winner_claim.get("price"), 0.0)
+        ranked_candidates = sorted(
+            by_agent.items(),
+            key=lambda entry: (
+                -float(dict(entry[1]).get("score", 0.0)),
+                float(dict(entry[1]).get("load", 0.0)),
+                str(entry[0]),
+            ),
+        )
+        _append_economy_round(
+            mission_id,
+            {
+                "mission_id": mission_id,
+                "intent_id": intent_id,
+                "role_name": role_name,
+                "task_type": task_type,
+                "required_units": int(required_units),
+                "budget_ceiling": float(budget_ceiling),
+                "candidate_count": int(len(by_agent)),
+                "rejected": {
+                    "by_budget": int(rejected_by_budget),
+                    "by_units": int(rejected_by_units),
+                },
+                "candidates": [
+                    {
+                        "agent_id": str(agent_name).strip(),
+                        "score": float(dict(claim).get("score", 0.0)),
+                        "price": float(dict(claim).get("price", 0.0)),
+                        "load": float(dict(claim).get("load", 0.0)),
+                        "available_units": int(dict(claim).get("available_units", 0) or 0),
+                        "breakdown": dict(dict(claim).get("economy_score_breakdown", {})),
+                    }
+                    for agent_name, claim in ranked_candidates
+                ],
+                "winner": {
+                    "agent_id": winner_agent,
+                    "score": float(dict(winner_claim).get("score", 0.0)),
+                    "price": float(dict(winner_claim).get("price", 0.0)),
+                    "selection_reason": winner_selection_reason,
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         if not _try_reserve_intent(
             intent_id=intent_id,
             mission_id=mission_id,
@@ -1655,6 +1777,7 @@ def _run_agent_process(
             "required_units": int(required_units),
             "selected_available_units": max(1, _as_int(winner_claim.get("available_units", 1), 1)),
             "budget_ceiling": budget_ceiling,
+            "winner_selection_reason": winner_selection_reason,
             "run_id": run_id,
             "namespace": topic_namespace,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1700,6 +1823,16 @@ def _run_agent_process(
         live_available = _agent_available_units(agent_id)
         soft_available = max(1, int(round(8.0 - min(7.0, task_load * 2.0))))
         available_units = max(1, min(live_available, soft_available))
+        economy_score_breakdown = _build_economy_score_breakdown(
+            score=score,
+            task_load=task_load,
+            preferred_bonus=preferred_bonus,
+            tie_break=tie_break,
+            bid_price=bid_price,
+            available_units=available_units,
+            required_units=required_units,
+            budget_ceiling=budget_ceiling,
+        )
         kernel.publish(
             kernel.role_claim_topic(role_name),
             {
@@ -1714,6 +1847,7 @@ def _run_agent_process(
                 "budget_ceiling": budget_ceiling,
                 "load": task_load,
                 "metrics": metrics,
+                "economy_score_breakdown": economy_score_breakdown,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )

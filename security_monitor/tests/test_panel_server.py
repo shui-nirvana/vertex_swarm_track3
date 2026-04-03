@@ -88,6 +88,9 @@ class PanelServerTests(unittest.TestCase):
             stage_failure = dict(overview["stage_failure"])
             self.assertEqual(str(stage_failure.get("failed_stage", "")), "")
             self.assertEqual(int(stage_failure.get("failed_step_index", 0)), 0)
+            economy_summary = dict(overview.get("economy_summary", {}))
+            self.assertIn("round_count", economy_summary)
+            self.assertIn("avg_candidate_count", economy_summary)
             layer_states = {str(item.get("layer", "")): str(item.get("state", "")) for item in overview["layers"]}
             self.assertEqual(layer_states.get("business"), "done")
             self.assertEqual(layer_states.get("acceptance"), "done")
@@ -196,6 +199,7 @@ class PanelServerTests(unittest.TestCase):
             self.assertEqual(int(local_view_a.get("handled_step_count", 0)), 1)
             self.assertEqual(int(shared_view_a.get("peer_count", 0)), 2)
             self.assertEqual(str(shared_view_a.get("current_layer", "")), "coordination")
+            self.assertIn("economy_summary", shared_view_a)
             self.assertFalse(bool(panel_a.get("is_abnormal")))
             self.assertIn("is now at step", str(panel_a.get("current_step_sentence", "")))
             flow_sentences = list(panel_a.get("business_flow_sentences", []))
