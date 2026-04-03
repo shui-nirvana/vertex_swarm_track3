@@ -11,33 +11,56 @@ It uses FoxMQ (MQTT) for transport and Vertex DAG proofing for auditable, tamper
 - Deterministic role negotiation across Scout / Guardian / Verifier
 - Verifiable execution with signatures, proof checks, and mission artifacts
 - Resilience validation with delay/drop fault scenarios
-- Demo-ready panel for runtime visibility and business triggering
+- Optional observability layer for demo and debugging only
 
 ## Diagram 1: System Module Interaction (Static Architecture)
 
 ```mermaid
 flowchart LR
-    OP[Operator] --> BOOT[start_track3_with_mqtt.ps1]
-    BOOT --> BROKER[FoxMQ Broker MQTT]
-    BOOT --> PANEL[Panel Server]
-    BOOT --> AGENTS[Agent Processes]
+    subgraph SWARM[Decentralized Agent Swarm]
+        A1[Agent Node A]
+        A2[Agent Node B]
+        A3[Agent Node C]
+        A4[Agent Node N]
+    end
 
-    AGENTS --> MAIN[track3/main.py]
-    MAIN --> KERNEL[coordination/kernel.py]
-    MAIN --> RUNTIME[coordination/agent_runtime.py]
-    RUNTIME --> PLUGINS[plugins/*]
+    subgraph AGENT_STACK[Per-Agent Runtime Stack]
+        MAIN[track3/main.py]
+        KERNEL[coordination/kernel.py]
+        RUNTIME[coordination/agent_runtime.py]
+        PLUGINS[plugins/*]
+        CONSENSUS[swarm/vertex_consensus.py]
+    end
 
-    KERNEL --> TOPICS[coordination/run-xxx topics]
-    TOPICS --> AANN[agents announcements/heartbeats]
-    TOPICS --> MISSION[missions start/stage/complete]
-    TOPICS --> TASKS[tasks/results/responses]
-    TOPICS --> ROLE[roles intent/claim]
+    subgraph BUS[Coordination Transport Plane]
+        BROKER[FoxMQ Broker MQTT]
+        TOPICS[coordination/run-xxx topics]
+    end
 
-    MAIN --> CONSENSUS[swarm/vertex_consensus.py]
-    CONSENSUS --> PROOF[proof + checks + signatures]
-    PROOF --> ARTIFACTS[artifacts/*.json]
-    PANEL --> ARTIFACTS
-    PANEL --> TOPICS
+    subgraph AUDIT[Verifiable Audit Outputs]
+        PROOF[proof + checks + signatures]
+        ARTIFACTS[artifacts/*.json]
+    end
+
+    A1 --> MAIN
+    A2 --> MAIN
+    A3 --> MAIN
+    A4 --> MAIN
+    MAIN --> KERNEL
+    KERNEL --> RUNTIME
+    RUNTIME --> PLUGINS
+    MAIN --> CONSENSUS
+
+    KERNEL <--> TOPICS
+    MAIN <--> TOPICS
+    TOPICS <--> BROKER
+
+    CONSENSUS --> PROOF
+    MAIN --> ARTIFACTS
+    PROOF --> ARTIFACTS
+
+    OBS[Optional Panel / Observer] -. observability only .-> TOPICS
+    OBS -. read-only .-> ARTIFACTS
 ```
 
 ## Diagram 2: Business Sequence (Dynamic Flow)
@@ -48,12 +71,10 @@ sequenceDiagram
     participant G as Guardian
     participant V as Verifier
     participant B as Broker(FoxMQ)
-    participant P as Panel
 
     S->>B: announce / heartbeat
     G->>B: announce / heartbeat
     V->>B: announce / heartbeat
-    P-->>B: subscribe runtime topics
 
     S->>B: role intent (scout)
     G->>B: role intent (guardian)
@@ -71,9 +92,6 @@ sequenceDiagram
     S->>B: proof write event
     G->>B: proof write event
     V->>B: proof write event
-
-    B-->>P: runtime events stream
-    P-->>P: timeline render (observability only)
 ```
 
 ## Repository Map (Scanned)
