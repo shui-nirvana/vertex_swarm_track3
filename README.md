@@ -11,6 +11,19 @@ It uses FoxMQ (MQTT) for transport and Vertex DAG proofing for auditable, tamper
 - Verifiable mission execution with proof and structured audit artifacts.
 - Resilient operation validated under normal, delay, and drop scenarios.
 
+## Competition Alignment
+
+- Coordination Correctness: single winner, no double assignment, deterministic resolution under contention.
+- Resilience: mission remains convergent under delay/drop and agent recovery scenarios.
+- Auditability: Proof of Coordination is independently verifiable and tamper checks fail as expected on manipulated proofs.
+- Security Posture: signed envelopes plus replay protection (nonce/timestamp window) validated in MQTT E2E tests.
+
+## Result Snapshot (MQTT E2E)
+
+- Strict cluster test discovery passed in MQTT mode.
+- Competition alignment checks passed: Coordination Correctness / Resilience / Auditability / Security Posture.
+- Core artifacts generated: `multiprocess_mission_record.json`, `coordination_proof.json`, `structured_event_log.json`, `economy_rounds.json`.
+
 ## Why This Project
 
 - Fully decentralized multi-agent coordination without a central orchestrator
