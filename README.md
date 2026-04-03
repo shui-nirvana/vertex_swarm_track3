@@ -1,184 +1,225 @@
-# Vertex Swarm Track3
+# Vertex Swarm Lab
 
-Leaderless multi-agent coordination runtime for Vertex Swarm Challenge 2026 Track3.
+## A Verifiable, Leaderless Multi-Agent Coordination System
 
-The system runs Scout / Guardian / Verifier style business flows over FoxMQ (MQTT), executes decentralized role negotiation, and produces auditable mission artifacts.
+Vertex Swarm Lab is a decentralized coordination runtime for security monitoring workflows.  
+It uses FoxMQ (MQTT) for transport and Vertex DAG proofing for auditable, tamper-evident execution.
 
-## What This Project Does
+## Why This Project
 
-- Runs independent agent processes without a central orchestrator.
-- Negotiates role ownership and task execution through coordination primitives (intent/claim/stage/complete).
-- Executes end-to-end business pipelines (currently focused on `threat_intel` in the panel flow).
-- Produces proof-oriented artifacts for replay, validation, and operations debugging.
-- Provides a real-time timeline panel for mission and runtime event inspection.
+- Fully decentralized multi-agent coordination without a central orchestrator
+- Deterministic role negotiation across Scout / Guardian / Verifier
+- Verifiable execution with signatures, proof checks, and mission artifacts
+- Resilience validation with delay/drop fault scenarios
+- Demo-ready panel for runtime visibility and business triggering
 
-## Current Runtime Model
+## Diagram 1: System Module Interaction (Static Architecture)
 
-- Transport: FoxMQ MQTT (`127.0.0.1:1883` by default)
-- Cluster mode: multiple agent processes in one run namespace (`run-<run_id>`)
-- Core path:
-  1. mission start
-  2. role negotiation and claims
-  3. stage execution (scout -> guardian -> verifier)
-  4. mission completion
+```mermaid
+flowchart LR
+    OP[Operator] --> BOOT[start_track3_with_mqtt.ps1]
+    BOOT --> BROKER[FoxMQ Broker MQTT]
+    BOOT --> PANEL[Panel Server]
+    BOOT --> AGENTS[Agent Processes]
 
-## Repository Layout
+    AGENTS --> MAIN[track3/main.py]
+    MAIN --> KERNEL[coordination/kernel.py]
+    MAIN --> RUNTIME[coordination/agent_runtime.py]
+    RUNTIME --> PLUGINS[plugins/*]
 
-- `security_monitor/track3/`
-  - Entry/runtime flow: `main.py`
-  - Internal protocol/demo helpers: `protocol.py`
-- `security_monitor/panel/`
-  - Timeline panel server and rendering logic: `server.py`
-- `security_monitor/coordination/`
-  - Coordination kernel/runtime integration
-- `security_monitor/swarm/`
-  - Consensus, message model, and related swarm mechanics
-- `security_monitor/roles/`
-  - Role implementations
-- `security_monitor/plugins/`
-  - Business task plugins (including threat intel processing)
-- `security_monitor/tests/`
-  - Unit/integration tests for runtime, panel, consensus, and flows
-- `start_foxmq.ps1`
-  - Local FoxMQ bootstrap script
-- `start_track3_with_mqtt.ps1`
-  - Main one-command launcher for test/runtime modes
+    KERNEL --> TOPICS[coordination/run-xxx topics]
+    TOPICS --> AANN[agents announcements/heartbeats]
+    TOPICS --> MISSION[missions start/stage/complete]
+    TOPICS --> TASKS[tasks/results/responses]
+    TOPICS --> ROLE[roles intent/claim]
 
-## Requirements
+    MAIN --> CONSENSUS[swarm/vertex_consensus.py]
+    CONSENSUS --> PROOF[proof + checks + signatures]
+    PROOF --> ARTIFACTS[artifacts/*.json]
+    PANEL --> ARTIFACTS
+    PANEL --> TOPICS
+```
 
-- Windows 10/11
-- PowerShell 5+
-- Python 3.10+
-- Local FoxMQ binary (default expected under `tools/foxmq/v0.3.1/foxmq.exe`)
+## Diagram 2: Business Sequence (Dynamic Flow)
 
-FoxMQ references:
+```mermaid
+sequenceDiagram
+    participant S as Scout
+    participant G as Guardian
+    participant V as Verifier
+    participant B as Broker(FoxMQ)
+    participant P as Panel
 
-- Docs: https://docs.tashi.network/resources/foxmq/quick-start-direct
-- Releases: https://github.com/tashigg/foxmq/releases
+    S->>B: announce / heartbeat
+    G->>B: announce / heartbeat
+    V->>B: announce / heartbeat
+    P-->>B: subscribe runtime topics
 
-## Quick Start
+    S->>B: role intent (scout)
+    G->>B: role intent (guardian)
+    V->>B: role intent (verifier)
 
-### 1) Start FoxMQ
+    S->>B: role claim / identity assignment
+    G->>B: role claim / identity assignment
+    V->>B: role claim / identity assignment
+
+    S->>B: stage execute (assessment/conflict resolution)
+    G->>B: stage execute (mitigation/playbook)
+    V->>B: stage execute (verification/monitoring)
+
+    V->>B: mission_complete
+    S->>B: proof write event
+    G->>B: proof write event
+    V->>B: proof write event
+
+    B-->>P: runtime events stream
+    P-->>P: timeline render (observability only)
+```
+
+## Repository Map (Scanned)
+
+- `security_monitor/track3/`: runtime entrypoint and protocol orchestration
+- `security_monitor/coordination/`: coordination kernel, task lifecycle, plugin runtime
+- `security_monitor/transports/`: transport abstraction and FoxMQ MQTT transport
+- `security_monitor/integration/`: FoxMQ adapter, AI engine, settlement integration
+- `security_monitor/plugins/`: business plugins (`risk_control`, `threat_intel`, `verification`, `cross_org_alert`)
+- `security_monitor/swarm/`: Vertex consensus, security/signing, fault injection, message model
+- `security_monitor/scenarios/`: business templates and registries
+- `security_monitor/roles/`: role-oriented agent implementations
+- `security_monitor/panel/`: runtime panel API + rendering
+- `security_monitor/tests/`: unit, integration, consensus, panel, and E2E tests
+- `start_foxmq.ps1`: broker bootstrap
+- `start_track3_with_mqtt.ps1`: one-command run/test entry
+
+## Currently Supported Business Types
+
+| Business Type         | Template File                      | Description                                           |
+| :-------------------- | :--------------------------------- | :---------------------------------------------------- |
+| `risk_control`        | `risk_control.default.json`        | Risk assessment and mitigation workflow               |
+| `threat_intel`        | `threat_intel.default.json`        | Threat intelligence analysis and closed-loop response |
+| `agent_marketplace`   | `agent_marketplace.default.json`   | Marketplace-style multi-agent coordination            |
+| `distributed_rag`     | `distributed_rag.default.json`     | Distributed retrieval-augmented coordination flow     |
+| `compute_marketplace` | `compute_marketplace.default.json` | Compute scheduling and task coordination              |
+
+Default business type: `risk_control`.
+
+## Threat Intel Business Semantics
+
+| Stage | Role     | Action                                       | Output                                |
+| :---- | :------- | :------------------------------------------- | :------------------------------------ |
+| S0    | Scout    | Intake and context build                     | Mission start payload                 |
+| S1    | Scout    | Source scoring and conflict resolution       | Confidence + resolved claim           |
+| S2    | Scout    | ATT&CK / kill-chain mapping                  | Tactics, techniques, kill-chain stage |
+| S3    | Guardian | Playbook planning and execution              | Action logs + rollback decision       |
+| S4    | Verifier | Monitoring window and secondary verification | Residual risk + monitoring decision   |
+| S5    | Verifier | Final closure or rollback confirmation       | Mission complete + proof checks       |
+
+## Single-Machine Cluster Demo Quick Start
+
+### 1) Start local FoxMQ
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start_foxmq.ps1
 ```
 
-Default listeners:
+Default endpoints:
 
 - MQTT: `127.0.0.1:1883`
 - Cluster: `127.0.0.1:19793`
 
-### 2) Start Runtime Cluster + Panel
+### 2) Start local multi-agent cluster + panel
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1 -Mode runtime-cluster -RuntimeClusterAgents 5 -PanelPort 8787 -RunId demo-track3
+powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1 -Mode runtime-cluster -RuntimeClusterAgents 5 -PanelPort 8787 -RunId runtime5agents46
 ```
 
-Panel URL:
+Panel URL (observability/demo only):
 
 - `http://127.0.0.1:8787/`
 
-### 3) Bootstrap Mission (single command flow)
+### 3) Other demo modes
 
 ```powershell
+# Bootstrap mission
 powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1 -Mode agent-bootstrap
+
+# Internal acceptance
+powershell -ExecutionPolicy Bypass -File .\start_track3_with_mqtt.ps1 -Mode internal-acceptance
 ```
 
-## Launcher Modes (`start_track3_with_mqtt.ps1`)
+## Public-Network Deployment Quick Start (Production-Oriented)
 
-- `agent-bootstrap`
-- `internal-acceptance`
-- `tests-unit`
-- `tests-e2e`
-- `tests-all`
-- `tests-all-cluster-strict`
-- `runtime-single`
-- `runtime-cluster`
+Goal: run distributed agents on different machines against the same public MQTT broker.
 
-Common useful flags:
+Current validation status:
 
-- `-RunId <id>`
-- `-PanelPort <port>`
-- `-RuntimeClusterAgents <n>` (runtime-cluster requires at least 3)
-- `-MqttAddr <host:port>`
+- Validated: local multi-process cluster and LAN-style coordination flow.
+- Not yet formally validated: public-network cross-region stability and long-run stress tests.
+- So this section is a deployment guide/evolution path, not a claimed acceptance result.
 
-## Python Entry Modes (`security_monitor.track3.main`)
+### 1) Prepare a public MQTT broker
 
-- `--mode internal-single`
-- `--mode internal-acceptance`
-- `--mode agent-process`
+- Expose a reachable MQTT endpoint, for example: `<public-host>:1883`
+- Open required network/security-group ports
+- Verify connectivity from all agent nodes
 
-Common args:
+### 2) Start agent process on each machine
 
-- `--foxmq-backend mqtt`
-- `--foxmq-mqtt-addr 127.0.0.1:1883`
-- `--run-id <id>`
-- `--topic-namespace run-<id>`
-- `--output-dir <dir>`
-- `--agent-capabilities scout,guardian,verifier`
+```powershell
+python -m security_monitor.track3.main --mode agent-process --agent-id <agent-id> --agent-capabilities scout,guardian,verifier --foxmq-backend mqtt --foxmq-mqtt-addr <public-host>:1883 --run-id <same-run-id> --topic-namespace run-<same-run-id>
+```
 
-## Main Artifacts
+Example (same swarm session):
 
-- `artifacts/.../structured_event_log.json`
-- `artifacts/.../coordination_proof.json`
-- `artifacts/.../commit_log.json`
-- `artifacts/.../acceptance_report.json`
+- Machine A: `agent-a`
+- Machine B: `agent-b1`, `agent-b2`
+
+All agents within the same session should use the same `run_id` and `topic_namespace` so they join the same coordination space and can discover each other.
+`agent-a / agent-b1 / agent-b2` are only sample IDs, not fixed requirements.
+
+### 3) Optional: start panel as observer
+
+```powershell
+python -m security_monitor.panel.server --host 0.0.0.0 --port 8787 --artifacts-dir artifacts --run-id <same-run-id> --topic-namespace run-<same-run-id> --foxmq-mqtt-addr <public-host>:1883
+```
+
+Note: the panel is an observability layer, not a core production capability.
+
+### 4) Why require the same run_id/topic_namespace?
+
+- This is a session-isolation strategy to prevent traffic mixing across experiments and preserve auditability.
+- In public-network evolution, a lobby/registry layer can be added for automatic session assignment.
+- So this does not conflict with large-scale heterogeneous swarm discovery goals; it is a controlled engineering stage.
+
+## Artifacts and Success Signals
+
+Typical outputs:
+
 - `artifacts/.../multiprocess_mission_record.json`
+- `artifacts/.../coordination_proof.json`
+- `artifacts/.../structured_event_log.json`
+- `artifacts/.../acceptance_report.json`
 
-Key fields to inspect in mission record:
+Key fields:
 
 - `all_success`
 - `role_identity_assignments`
-- `steps`
+- `business_flow_log`
 - `coordination_proof`
 - `proof_checks`
 - `standard_metrics`
-- `business_flow_log`
 
-## Threat Intel Timeline Semantics (Panel)
-
-The panel currently maps threat intel execution into business semantics:
-
-- `S0` Lead Intake
-- `S1` Source Scoring and Conflict Resolution
-- `S2` ATT&CK/Kill-Chain Mapping
-- `S3` Playbook Planning and Execution
-- `S4` Monitoring Window and Secondary Verification
-- `S5` Completion/Rollback
-
-The business chain lines and detail text are now fully English in the panel.
-
-## Testing and Quality Gates
-
-Set MQTT env when needed:
-
-```powershell
-$env:FOXMQ_MQTT_ADDR="127.0.0.1:1883"
-```
-
-Run tests:
-
-```powershell
-python -m unittest security_monitor.tests.test_swarm_track3 -v
-python -m unittest security_monitor.tests.test_vertex_consensus -v
-python -m unittest security_monitor.tests.test_panel_server -v
-```
-
-Run lint and typing:
+## Quality Gates
 
 ```powershell
 python -m ruff check .
 python -m mypy security_monitor
+python -m unittest security_monitor.tests.test_swarm_track3 -v
+python -m unittest security_monitor.tests.test_vertex_consensus -v
 ```
 
-## Troubleshooting
+## LAN Notes
 
-- FoxMQ not reachable:
-  - Ensure `start_foxmq.ps1` is running
-  - Ensure `127.0.0.1:1883` is reachable
-- Mission not completing:
-  - Check `all_success`, `steps`, and `proof_checks` in mission record
-  - Review panel runtime events for stage failures
-- Type-check mismatch:
-  - Use `python -m mypy security_monitor` from repo root
+- All machines must use the same MQTT endpoint
+- All agents must share the same `run_id` and `topic_namespace`
+- Use at least 3 agents for stable role coverage and convergence

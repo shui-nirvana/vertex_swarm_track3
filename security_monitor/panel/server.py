@@ -1450,7 +1450,6 @@ def _panel_html(initial_agent_columns_html: str) -> str:
     let lastPanelSignature = '';
     let lastOverviewSignature = '';
     let lastRuntimeEventsPayload = {events: []};
-    let lastRuntimeSignature = '';
     let lastRuntimeEventOrder = 0;
     let pendingRuntimeEvents = [];
     let runtimeFlushTimer = null;
@@ -1611,7 +1610,7 @@ def _panel_html(initial_agent_columns_html: str) -> str:
       if (hinted > phase) {
         phase = hinted;
       }
-      function usePhase(targetPhase, text, fallbackPrefix) {
+      function usePhase(targetPhase, text) {
         if (targetPhase < phase) {
           return {text: `${text}`, phase};
         }
@@ -1726,8 +1725,6 @@ def _panel_html(initial_agent_columns_html: str) -> str:
         lines.push(`${parts.join(', ')}.`);
       } else if (kind === 'mission_complete') {
         lines.push(`Mission loop completed, final state=${state}.`);
-      } else if (kind === 'business_begin' || kind === 'trigger_sent') {
-        lines.push('Business lead has been ingested, waiting for coordinated evaluation.');
       } else if (kind === 'tashi_intent' || kind === 'tashi_claim') {
         lines.push(`Coordination primitive action: ${kind}, participated by ${agent}.`);
       } else {
@@ -1770,7 +1767,13 @@ def _panel_html(initial_agent_columns_html: str) -> str:
       const latestOrder = Number(runtime.latest_event_order || 0);
       lastRuntimeEventOrder = latestOrder;
       pendingRuntimeEvents = [];
-      lastRuntimeEventsPayload = {events: []};
+      const baselineEvents = Array.isArray(runtime.events)
+        ? runtime.events.filter((evt) => {
+            const kind = String(((evt || {}).kind) || '');
+            return kind === 'agent_online' || kind === 'handshake_success' || kind === 'handshake_refresh';
+          }).slice(-500)
+        : [];
+      lastRuntimeEventsPayload = {events: baselineEvents};
       inBusinessPhase = false;
       businessStartEventOrder = latestOrder + 1;
       runtimeBaselineReady = true;
@@ -1878,7 +1881,7 @@ def _panel_html(initial_agent_columns_html: str) -> str:
           const evtObj = evt && typeof evt === 'object' ? evt : {};
           const evtOrder = Number(evtObj.event_order || 0);
           const evtKind = String(evtObj.kind || '');
-          if (businessStartEventOrder && evtOrder < businessStartEventOrder) {
+          if (inBusinessPhase && businessStartEventOrder && evtOrder < businessStartEventOrder) {
             continue;
           }
           const evtAgent = normalizeAgentId(evtObj.agent_id);
@@ -1899,22 +1902,19 @@ def _panel_html(initial_agent_columns_html: str) -> str:
           if (evtKind === 'tashi_intent' || evtKind === 'tashi_claim') { evtCls = 'stage'; evtTag = 'tag-tashi'; }
           if (evtKind === 'handshake_refresh' || evtKind === 'tashi_hint') evtCls = 'stage';
           if (evtKind === 'handshake_heartbeat') evtCls = 'message';
-          if (evtKind === 'foxmq_message') { evtCls = 'message'; evtTag = 'tag-foxmq'; }
           const bizInfo = businessChainText(evtObj, semanticState, Number(phaseByOrder[String(evtOrder)] || 0));
-          const headPrefix = evtKind === 'foxmq_message' ? 'Detail Layer/FoxMQ' : 'Coordination Layer';
+          const summaryText = String(evtObj.summary || 'Trigger event received');
           events.push({
-            kind: 'message',
-            order: Number(evtObj.event_order || 0),
+            order: evtOrder,
             cls: evtCls,
             tag: evtTag,
             businessHead: String((bizInfo && bizInfo.text) || ''),
-            head: `${headPrefix}: ${String(evtObj.summary || 'Trigger event received')}`,
+            head: `Coordination Layer: ${summaryText}`,
             detail: `${readableDetailText(evtObj, bizInfo)}\n\n----\nStructured Raw Fields\n${structuredDetailText(evtObj, evtKind)}`,
           });
         }
         if (!events.length) {
           events.push({
-            kind: 'empty',
             order: 0,
             cls: 'pending',
             head: businessStartEventOrder ? 'Realtime: No new events for current business.' : 'Realtime: Waiting for business trigger.',
@@ -2058,7 +2058,6 @@ def _panel_html(initial_agent_columns_html: str) -> str:
           lastAgentPanelsPayload = {agent_panels: []};
           lastRuntimeEventsPayload = {events: []};
           lastPanelSignature = '';
-          lastRuntimeSignature = '';
           lastRuntimeEventOrder = 0;
           pendingRuntimeEvents = [];
           runtimeBaselineReady = false;
