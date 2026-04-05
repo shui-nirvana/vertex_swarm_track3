@@ -233,7 +233,12 @@ def _parse_timestamp_seconds(raw: Any) -> float | None:
 
 def _build_stage_status(record: MissionRecord) -> list[dict[str, Any]]:
     payload = _as_dict(record.payload)
-    ordered_roles = ["scout", "guardian", "verifier"]
+    protocol_roles = [
+        _safe_text(item).lower()
+        for item in _as_list(payload.get("protocol_roles"))
+        if _safe_text(item)
+    ]
+    ordered_roles = protocol_roles if protocol_roles else ["scout", "guardian", "verifier", "auditor"]
     flow_log = _as_list(payload.get("business_flow_log"))
     role_state: dict[str, str] = {}
     role_started_at: dict[str, float] = {}
@@ -354,10 +359,35 @@ def _agent_business_flow_sentences(agent_id: str, handled_steps: list[dict[str, 
     for step in ordered:
         step_index = int(step.get("step_index", 0) or 0)
         role_name = _safe_text(step.get("role_name"))
+        stage = _safe_text(step.get("stage")).upper()
         task_type = _safe_text(step.get("task_type"))
         state = _safe_text(step.get("state")).lower() or "unknown"
-        lines.append(f"Step #{step_index}: handled {task_type} as {role_name}, result={state}.")
+        selection_reason = _safe_text(step.get("selection_reason"))
+        if selection_reason:
+            lines.append(
+                f"Step #{step_index}: [{stage or '-'}] handled {task_type} as {role_name}, result={state}, winner_rule={selection_reason}."
+            )
+        else:
+            lines.append(f"Step #{step_index}: [{stage or '-'}] handled {task_type} as {role_name}, result={state}.")
     return lines
+
+
+def _agent_latest_role_impact_sentence(agent_id: str, handled_steps: list[dict[str, Any]]) -> str:
+    if not handled_steps:
+        return f"{agent_id} no mission step assigned yet; role impact will appear after first execution."
+    ordered = sorted(handled_steps, key=lambda item: int(item.get("step_index", 0) or 0))
+    latest = ordered[-1]
+    role_name = _safe_text(latest.get("role_name")).lower() or "unknown"
+    stage = _safe_text(latest.get("stage")).upper() or "-"
+    state = _safe_text(latest.get("state")).lower() or "unknown"
+    result_summary = _as_dict(latest.get("result_summary"))
+    decision = _safe_text(result_summary.get("decision"))
+    severity = _safe_text(result_summary.get("severity"))
+    reason = _safe_text(latest.get("selection_reason"))
+    decision_part = f", decision={decision}" if decision else ""
+    severity_part = f", severity={severity}" if severity else ""
+    reason_part = f", winner_rule={reason}" if reason else ""
+    return f"{agent_id} latest role impact: [{stage}] {role_name} completed with state={state}{decision_part}{severity_part}{reason_part}."
 
 
 def _agent_tashi_primitives(
@@ -459,7 +489,9 @@ def _build_agent_panels(record: MissionRecord, local_agent_id: str) -> list[dict
                 handled_steps.append(
                     {
                         "step_index": int(item.get("step_index", 0) or 0),
+                        "stage": _safe_text(item.get("stage")),
                         "role_name": _safe_text(item.get("role_name")),
+                        "selection_reason": _safe_text(item.get("selection_reason")),
                         "task_type": _safe_text(item.get("task_type")),
                         "state": step_state,
                         "task_id": _safe_text(item.get("task_id")),
@@ -478,6 +510,7 @@ def _build_agent_panels(record: MissionRecord, local_agent_id: str) -> list[dict
             or (failed_stage and failed_stage in assigned_roles)
         )
         current_step_sentence = _agent_current_step_sentence(agent_id, handled_steps)
+        latest_role_impact_sentence = _agent_latest_role_impact_sentence(agent_id, handled_steps)
         business_flow_sentences = _agent_business_flow_sentences(agent_id, handled_steps)
         tashi_primitives = _agent_tashi_primitives(
             agent_id=agent_id,
@@ -493,6 +526,7 @@ def _build_agent_panels(record: MissionRecord, local_agent_id: str) -> list[dict
                 "is_abnormal": abnormal,
                 "related_to_current_stage": related_to_current_stage,
                 "current_step_sentence": current_step_sentence,
+                "latest_role_impact_sentence": latest_role_impact_sentence,
                 "business_flow_sentences": business_flow_sentences,
                 "tashi_primitives": tashi_primitives,
                 "foxmq_messages": foxmq_messages,
@@ -1841,6 +1875,11 @@ def _panel_html(initial_agent_columns_html: str) -> str:
           business.textContent = inBusinessPhase
             ? String(panel.current_step_sentence || `${agentId} waiting for business trigger.`)
             : `${agentId} waiting for new business trigger.`;
+          const impact = document.createElement('div');
+          impact.className = 'agent-sentence';
+          impact.textContent = inBusinessPhase
+            ? String(panel.latest_role_impact_sentence || `${agentId} no mission step assigned yet.`)
+            : `${agentId} no mission step assigned yet; role impact will appear after business execution starts.`;
           const flowSentences = Array.isArray(panel.business_flow_sentences) ? panel.business_flow_sentences : [];
           const protocol = document.createElement('div');
           protocol.className = 'protocol-line';
@@ -1848,6 +1887,7 @@ def _panel_html(initial_agent_columns_html: str) -> str:
             ? String(flowSentences.slice(0, 3).join('; ') || 'No business execution records yet.')
             : 'Initial view: historical flow before refresh is not loaded.';
           step.appendChild(business);
+          step.appendChild(impact);
           step.appendChild(protocol);
           timeline.appendChild(step);
           card.appendChild(timeline);
@@ -1954,6 +1994,10 @@ def _panel_html(initial_agent_columns_html: str) -> str:
           wrap.appendChild(line);
           timeline.appendChild(wrap);
         }
+        const impactLine = document.createElement('div');
+        impactLine.className = 'agent-sentence';
+        impactLine.textContent = String(panel.latest_role_impact_sentence || `${agentId} no mission step assigned yet.`);
+        card.appendChild(impactLine);
         card.appendChild(timeline);
         holder.appendChild(card);
         renderedCount += 1;

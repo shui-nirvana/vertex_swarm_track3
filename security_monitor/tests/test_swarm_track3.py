@@ -471,6 +471,8 @@ class Track3SwarmTests(unittest.TestCase):
             mission_id = str(report.get("mission_id", "")).strip()
             self.assertTrue(mission_id)
             role_assignments = dict(report.get("role_identity_assignments", {}))
+            protocol_roles = [str(item).strip().lower() for item in report.get("protocol_roles", []) if str(item).strip()]
+            self.assertEqual(protocol_roles, ["scout", "guardian", "verifier", "auditor"])
             announcements = [str(item.get("agent_id", "")).strip() for item in report.get("agent_announcements", []) if str(item.get("agent_id", "")).strip()]
             self.assertGreaterEqual(len(announcements), 1)
             for role_name in ("scout", "guardian", "verifier"):
@@ -487,6 +489,13 @@ class Track3SwarmTests(unittest.TestCase):
                 if actual_assignee not in {item[0] for item in scored_candidates}:
                     scored_candidates.append((actual_assignee, 1000.0, 0.0))
                 self.assertIn(actual_assignee, {item[0] for item in scored_candidates})
+            self.assertIn("auditor", role_assignments)
+            verifier_owner = str(dict(role_assignments.get("verifier", {})).get("assigned_agent", "")).strip()
+            auditor_owner = str(dict(role_assignments.get("auditor", {})).get("assigned_agent", "")).strip()
+            self.assertEqual(auditor_owner, verifier_owner)
+            auditor_evidence = dict(report.get("auditor_evidence", {}))
+            self.assertEqual(str(auditor_evidence.get("role", "")).strip().lower(), "auditor")
+            self.assertEqual(str(auditor_evidence.get("stage", "")).strip().upper(), "CLOSE")
             steps = list(report.get("steps", []))
             self.assertEqual(len(steps), 3)
             task_ids = [str(step.get("task_id", "")).strip() for step in steps]
@@ -947,16 +956,23 @@ class Track3SwarmTests(unittest.TestCase):
         """
         self.assertTrue(bool(report.get("all_success")))
         self.assertTrue(bool(report.get("role_identity_negotiation")))
+        protocol_roles = [str(item).strip().lower() for item in report.get("protocol_roles", []) if str(item).strip()]
+        self.assertEqual(protocol_roles, ["scout", "guardian", "verifier", "auditor"])
         role_identity_assignments = dict(report.get("role_identity_assignments", {}))
         expected_assignments = {
             "scout": "agent-scout-only",
             "guardian": "agent-guardian-only",
             "verifier": "agent-verifier-only",
+            "auditor": "agent-verifier-only",
         }
         for role_name, expected_agent in expected_assignments.items():
             assignment = dict(role_identity_assignments.get(role_name, {}))
             self.assertEqual(str(assignment.get("role_name", "")).strip().lower(), role_name)
             self.assertEqual(str(assignment.get("assigned_agent", "")).strip(), expected_agent)
+        auditor_evidence = dict(report.get("auditor_evidence", {}))
+        self.assertEqual(str(auditor_evidence.get("role", "")).strip().lower(), "auditor")
+        self.assertEqual(str(auditor_evidence.get("stage", "")).strip().upper(), "CLOSE")
+        self.assertTrue(str(auditor_evidence.get("signature", "")).strip())
         steps = list(report.get("steps", []))
         self.assertEqual(len(steps), 3)
         role_names = [str(step.get("role_name", "")).strip().lower() for step in steps]
@@ -1145,7 +1161,7 @@ class Track3SwarmTests(unittest.TestCase):
             self.assertEqual(report["topic_namespace"], topic_namespace)
             self.assertTrue(bool(report.get("role_identity_negotiation")))
             role_identity_assignments = dict(report.get("role_identity_assignments", {}))
-            for role_name in ("scout", "guardian", "verifier"):
+            for role_name in ("scout", "guardian", "verifier", "auditor"):
                 self.assertIn(role_name, role_identity_assignments)
                 assignment = dict(role_identity_assignments.get(role_name, {}))
                 self.assertEqual(str(assignment.get("role_name", "")).strip().lower(), role_name)
@@ -1173,6 +1189,14 @@ class Track3SwarmTests(unittest.TestCase):
             self.assertEqual(len(flow_log), 3)
             expected_roles = ["scout", "guardian", "verifier"]
             self.assertEqual([str(item.get("role_name", "")).strip().lower() for item in flow_log], expected_roles)
+            self.assertEqual(
+                [str(item).strip().lower() for item in report.get("protocol_roles", []) if str(item).strip()],
+                ["scout", "guardian", "verifier", "auditor"],
+            )
+            auditor_evidence = dict(report.get("auditor_evidence", {}))
+            self.assertEqual(str(auditor_evidence.get("role", "")).strip().lower(), "auditor")
+            self.assertEqual(str(auditor_evidence.get("stage", "")).strip().upper(), "CLOSE")
+            self.assertTrue(str(auditor_evidence.get("signature", "")).strip())
             mission_payload = dict(report.get("mission_payload", {}))
             business_context = dict(mission_payload.get("business_context", {}))
             self.assertEqual(str(business_context.get("scenario", "")).strip(), "risk_control_high_velocity_withdrawal")

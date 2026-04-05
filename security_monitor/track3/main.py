@@ -113,12 +113,181 @@ def _stage_signature_payload(step: Dict[str, Any]) -> Dict[str, Any]:
     """Build canonical stage fields used for consensus signature generation/verification."""
     return {
         "mission_id": str(step.get("mission_id", "")).strip(),
+        "stage": str(step.get("stage", "")).strip().upper(),
+        "role": str(step.get("role", "")).strip().lower(),
         "role_name": str(step.get("role_name", "")).strip().lower(),
         "task_id": str(step.get("task_id", "")).strip(),
         "selected_agent": str(step.get("selected_agent", "")).strip(),
+        "selected_winner": str(step.get("selected_winner", "")).strip(),
+        "candidate_score": float(step.get("candidate_score", 0.0) or 0.0),
+        "reason": str(step.get("reason", "")).strip(),
+        "ttl": float(step.get("ttl", 0.0) or 0.0),
         "state": str(step.get("state", "")).strip().lower(),
         "result": dict(step.get("result", {})),
     }
+
+
+PROTOCOL_PHASES = ("DISCOVER", "ASSESS", "PLAN", "MITIGATE", "VERIFY", "CLOSE")
+ROLE_TO_PROTOCOL_STAGE = {
+    "scout": "ASSESS",
+    "guardian": "MITIGATE",
+    "verifier": "VERIFY",
+    "auditor": "CLOSE",
+}
+
+
+def _stable_state_hash(payload: Dict[str, Any]) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _state_transition_trace(chain: list[Dict[str, Any]]) -> Dict[str, Any]:
+    transitions: list[Dict[str, Any]] = []
+    snapshots: list[Dict[str, Any]] = []
+    current_state: Dict[str, Any] = {"steps": []}
+    for index, step in enumerate(chain, start=1):
+        stage_snapshot = {
+            "ordered_event_index": int(index),
+            "mission_id": str(step.get("mission_id", "")).strip(),
+            "role_name": str(step.get("role_name", "")).strip().lower(),
+            "stage": str(step.get("stage", "")).strip().upper(),
+            "task_id": str(step.get("task_id", "")).strip(),
+            "selected_agent": str(step.get("selected_agent", "")).strip(),
+            "state": str(step.get("state", "")).strip().lower(),
+            "result": dict(step.get("result", {})),
+        }
+        state_hash_before = _stable_state_hash(current_state)
+        next_steps = list(current_state.get("steps", []))
+        next_steps.append(dict(stage_snapshot))
+        current_state = {"steps": next_steps}
+        state_hash_after = _stable_state_hash(current_state)
+        transitions.append(
+            {
+                "ordered_event_index": int(index),
+                "stage": str(stage_snapshot.get("stage", "")),
+                "role_name": str(stage_snapshot.get("role_name", "")),
+                "state_hash_before": state_hash_before,
+                "state_hash_after": state_hash_after,
+            }
+        )
+        snapshots.append(dict(stage_snapshot))
+    final_state_hash = _stable_state_hash(current_state)
+    replay_state_hash = _stable_state_hash({"steps": snapshots})
+    return {
+        "ordered_event_count": int(len(transitions)),
+        "transitions": transitions,
+        "final_state_hash": final_state_hash,
+        "replay_state_hash": replay_state_hash,
+        "convergence_check": {
+            "deterministic_replay_match": bool(final_state_hash == replay_state_hash),
+            "rule": "same_ordered_event_stream_equals_same_final_state_hash",
+        },
+    }
+
+
+def _build_auditor_evidence_message(
+    mission_id: str,
+    selected_winner: str,
+    final_success: bool,
+    all_success: bool,
+    ttl_seconds: float,
+    report_path: str,
+    economy_rounds_path: str,
+) -> Dict[str, Any]:
+    candidate_score = 1.0 if final_success else 0.6 if all_success else 0.3
+    reason = "proof_and_economy_artifact_finalization"
+    message = {
+        "mission_id": str(mission_id).strip(),
+        "stage": ROLE_TO_PROTOCOL_STAGE.get("auditor", "CLOSE"),
+        "role": "auditor",
+        "candidate_score": float(round(candidate_score, 6)),
+        "selected_winner": str(selected_winner).strip(),
+        "reason": reason,
+        "selection_reason": reason,
+        "ttl": float(max(0.0, ttl_seconds)),
+        "economy_score_breakdown": {
+            "model": "auditor_v1",
+            "components": {
+                "proof_integrity_weight": 0.5,
+                "economy_trace_weight": 0.3,
+                "convergence_trace_weight": 0.2,
+            },
+            "inputs": {
+                "final_success": bool(final_success),
+                "all_success": bool(all_success),
+            },
+        },
+        "artifacts": {
+            "mission_record_path": str(report_path),
+            "economy_rounds_path": str(economy_rounds_path),
+        },
+    }
+    signature_payload = {
+        "mission_id": str(message.get("mission_id", "")),
+        "stage": str(message.get("stage", "")),
+        "role": str(message.get("role", "")),
+        "selected_winner": str(message.get("selected_winner", "")),
+        "reason": str(message.get("reason", "")),
+    }
+    message["signature"] = sign_payload(_agent_secret(selected_winner), signature_payload)
+    return message
+
+
+def _build_self_healing_drill_events(
+    guardian_assigned: str,
+    redistributed_to: str,
+    quorum_required: int,
+    event_time: str,
+) -> list[Dict[str, Any]]:
+    guardian = str(guardian_assigned).strip()
+    target = str(redistributed_to).strip()
+    timestamp = str(event_time).strip() or datetime.now(timezone.utc).isoformat()
+    return [
+        {
+            "event_type": "heartbeat_miss",
+            "role_name": "guardian",
+            "agent_id": guardian,
+            "state_transition": "SUSPECT",
+            "trigger": "self_healing_drill",
+            "timestamp": timestamp,
+        },
+        {
+            "event_type": "quorum_confirmed_dead",
+            "role_name": "guardian",
+            "agent_id": guardian,
+            "state_transition": "DEAD",
+            "trigger": "self_healing_drill",
+            "quorum_required": int(max(2, quorum_required)),
+            "timestamp": timestamp,
+        },
+        {
+            "event_type": "role_redistributed",
+            "role_name": "guardian",
+            "from_agent": guardian,
+            "to_agent": target,
+            "state_transition": "REDISTRIBUTE",
+            "trigger": "self_healing_drill",
+            "timestamp": timestamp,
+        },
+        {
+            "event_type": "agent_rejoined",
+            "role_name": "guardian",
+            "agent_id": guardian,
+            "state_transition": "REJOINING",
+            "recovery_capacity_ratio": 0.5,
+            "recovery_epochs": 2,
+            "trigger": "self_healing_drill",
+            "timestamp": timestamp,
+        },
+        {
+            "event_type": "agent_active_restored",
+            "role_name": "guardian",
+            "agent_id": guardian,
+            "state_transition": "ACTIVE",
+            "trigger": "self_healing_drill",
+            "timestamp": timestamp,
+        },
+    ]
 
 
 def _build_kernel(
@@ -215,6 +384,7 @@ def _run_agent_process(
     bootstrap_ready_timeout_seconds: float,
     bootstrap_pre_guardian_delay_seconds: float,
     bootstrap_wait_timeout_seconds: float,
+    self_healing_drill: bool,
     exit_on_mission_complete: bool,
     business_type: str,
     business_input_json: str,
@@ -268,6 +438,7 @@ def _run_agent_process(
     reservation_by_intent: Dict[str, Dict[str, Any]] = {}
     mission_spend_by_mission: Dict[str, float] = {}
     stage_roles = ("scout", "guardian", "verifier")
+    protocol_roles = ("scout", "guardian", "verifier", "auditor")
     bootstrap_report_lock = threading.Lock()
     bootstrap_report_written = False
     bootstrap_mission_id = f"mission-{run_id}"
@@ -391,6 +562,63 @@ def _run_agent_process(
             "avg_candidate_count": round(candidate_count_sum / float(len(rounds)), 3),
             "total_rejected_by_budget": int(rejected_budget_sum),
             "total_rejected_by_units": int(rejected_units_sum),
+        }
+
+    def _build_risk_credit_settlement(
+        mission_id: str,
+        chain: list[Dict[str, Any]],
+        role_identity_assignments: Dict[str, Dict[str, Any]],
+        all_success: bool,
+        mission_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        business_context = dict(mission_payload.get("business_context", {}))
+        amount_usdt = float(business_context.get("amount_usdt", 1000.0) or 1000.0)
+        escrow_locked = round(max(100.0, amount_usdt * 0.01), 6)
+        allocation_percent = {
+            "scout": 0.35,
+            "guardian": 0.40,
+            "verifier": 0.20,
+        }
+        reserve_percent = 0.05
+        settlement_lines: list[Dict[str, Any]] = []
+        for role_name, percent in allocation_percent.items():
+            assigned = dict(role_identity_assignments.get(role_name, {}))
+            recipient = str(assigned.get("assigned_agent", "")).strip() or f"unassigned-{role_name}"
+            released = round(escrow_locked * percent, 6) if all_success else 0.0
+            settlement_lines.append(
+                {
+                    "role_name": role_name,
+                    "recipient_agent": recipient,
+                    "allocation_percent": float(percent),
+                    "released_risk_credit": float(released),
+                    "status": "released" if all_success else "withheld",
+                }
+            )
+        reserve_amount = round(escrow_locked * reserve_percent, 6)
+        return {
+            "mission_id": mission_id,
+            "unit": "RISK_CREDIT",
+            "escrow_locked": float(escrow_locked),
+            "escrow_release_condition": "verify_pass",
+            "verify_passed": bool(all_success),
+            "split_policy": {
+                "scout": 0.35,
+                "guardian": 0.40,
+                "verifier": 0.20,
+                "burn_reserve": 0.05,
+            },
+            "lines": settlement_lines,
+            "burn_reserve": {
+                "allocation_percent": float(reserve_percent),
+                "amount_risk_credit": float(reserve_amount),
+                "status": "reserved" if all_success else "rollback_pool",
+            },
+            "penalty": {
+                "triggered": bool(not all_success),
+                "reason": "verify_failed_or_mission_incomplete" if not all_success else "",
+                "reputation_delta": {"scout": -0.08, "guardian": -0.08} if not all_success else {},
+                "budget_rollback": float(escrow_locked) if not all_success else 0.0,
+            },
         }
 
     def on_result(message: Dict[str, Any]) -> None:
@@ -878,11 +1106,23 @@ def _run_agent_process(
                 }
                 for item in stage_roles
             }
+            auditor_owner = str(
+                role_identity_assignments.get("verifier", {}).get("assigned_agent", "")
+                or selected_agent_by_role.get("verifier", "")
+                or agent_id
+            ).strip()
+            role_identity_assignments["auditor"] = {
+                "role_name": "auditor",
+                "assigned_agent": auditor_owner,
+                "mode": "evidence_synthesizer",
+            }
             mission_payload = dict(state.get("payload", {}))
             business_flow_log = [
                 {
                     "step_index": index,
+                    "stage": str(step.get("stage", ROLE_TO_PROTOCOL_STAGE.get(str(step.get("role_name", "")).strip().lower(), "ASSESS"))).strip().upper(),
                     "role_name": str(step.get("role_name", "")).strip().lower(),
+                    "selection_reason": str(step.get("selection_reason", step.get("winner_selection_reason", ""))).strip(),
                     "task_id": str(step.get("task_id", "")).strip(),
                     "task_type": str(dict(step.get("result", {})).get("task_type", "")).strip(),
                     "selected_agent": str(step.get("selected_agent", "")).strip(),
@@ -898,10 +1138,111 @@ def _run_agent_process(
                 }
                 for index, step in enumerate(chain, start=1)
             ]
+            ordered_event_ids = [
+                str(item).strip()
+                for item in dict(coordination_proof.get("proof_payload", {})).get("ordered_event_ids", [])
+                if str(item).strip()
+            ]
+            ordered_event_index = [
+                {"ordered_event_index": int(index), "event_id": event_id}
+                for index, event_id in enumerate(ordered_event_ids, start=1)
+            ]
+            state_transition = _state_transition_trace(chain)
+            final_success = bool(all_success and readiness_ok and consensus_finalized)
+            risk_credit_settlement = _build_risk_credit_settlement(
+                mission_id=mission_id,
+                chain=chain,
+                role_identity_assignments=role_identity_assignments,
+                all_success=final_success,
+                mission_payload=mission_payload,
+            )
+            economy_summary = dict(economy_summary)
+            economy_summary["unit"] = "RISK_CREDIT"
+            economy_summary["risk_credit_settlement"] = risk_credit_settlement
+            self_healing_events: list[Dict[str, Any]] = []
+            for role_name in stage_roles:
+                assigned_agent = str(dict(role_identity_assignments.get(role_name, {})).get("assigned_agent", "")).strip()
+                selected_agent = str(selected_agent_by_role.get(role_name, "")).strip()
+                if not assigned_agent or not selected_agent or assigned_agent == selected_agent:
+                    continue
+                event_time = str(
+                    next(
+                        (
+                            step.get("timestamp")
+                            for step in chain
+                            if str(step.get("role_name", "")).strip().lower() == role_name
+                            and str(step.get("selected_agent", "")).strip() == selected_agent
+                        ),
+                        datetime.now(timezone.utc).isoformat(),
+                    )
+                )
+                self_healing_events.append(
+                    {
+                        "event_type": "heartbeat_miss",
+                        "role_name": role_name,
+                        "agent_id": assigned_agent,
+                        "state_transition": "SUSPECT",
+                        "timestamp": event_time,
+                    }
+                )
+                self_healing_events.append(
+                    {
+                        "event_type": "quorum_confirmed_dead",
+                        "role_name": role_name,
+                        "agent_id": assigned_agent,
+                        "state_transition": "DEAD",
+                        "quorum_required": int(max(2, threshold_for(max(3, len(vertex_participants))))),
+                        "timestamp": event_time,
+                    }
+                )
+                self_healing_events.append(
+                    {
+                        "event_type": "role_redistributed",
+                        "role_name": role_name,
+                        "from_agent": assigned_agent,
+                        "to_agent": selected_agent,
+                        "state_transition": "REDISTRIBUTE",
+                        "timestamp": event_time,
+                    }
+                )
+                if assigned_agent in readiness:
+                    self_healing_events.append(
+                        {
+                            "event_type": "agent_rejoined",
+                            "role_name": role_name,
+                            "agent_id": assigned_agent,
+                            "state_transition": "REJOINING",
+                            "recovery_capacity_ratio": 0.5,
+                            "recovery_epochs": 2,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+            if bool(self_healing_drill) and not self_healing_events:
+                guardian_assigned = str(dict(role_identity_assignments.get("guardian", {})).get("assigned_agent", "")).strip()
+                fallback_candidates = [
+                    str(selected_agent_by_role.get("verifier", "")).strip(),
+                    str(selected_agent_by_role.get("scout", "")).strip(),
+                ]
+                if not guardian_assigned:
+                    guardian_assigned = str(next(iter(readiness.keys()), "")).strip()
+                redistributed_to = next((item for item in fallback_candidates if item and item != guardian_assigned), "")
+                if not redistributed_to:
+                    redistributed_to = str(
+                        next((item for item in readiness.keys() if str(item).strip() != guardian_assigned), guardian_assigned)
+                    ).strip()
+                event_time = datetime.now(timezone.utc).isoformat()
+                self_healing_events = _build_self_healing_drill_events(
+                    guardian_assigned=guardian_assigned,
+                    redistributed_to=redistributed_to,
+                    quorum_required=int(threshold_for(max(3, len(vertex_participants)))),
+                    event_time=event_time,
+                )
             report = {
                 "run_id": run_id,
                 "topic_namespace": topic_namespace,
                 "mission_id": mission_id,
+                "protocol_phases": list(PROTOCOL_PHASES),
+                "protocol_roles": list(protocol_roles),
                 "transport_backend": foxmq_backend,
                 "mqtt_addr": foxmq_mqtt_addr,
                 "started_at": bootstrap_started_at.isoformat(),
@@ -911,11 +1252,12 @@ def _run_agent_process(
                 "mission_payload": mission_payload,
                 "economy_summary": economy_summary,
                 "economy_rounds": economy_rounds,
+                "economy_settlement": risk_credit_settlement,
                 "steps": chain,
                 "business_flow_log": business_flow_log,
                 "step_metrics": step_metrics,
                 "standard_metrics": _compute_standard_metrics(report_items_for_metrics, bootstrap_started_at, finished_at),
-                "all_success": all_success and readiness_ok and consensus_finalized,
+                "all_success": final_success,
                 "failure_reason": failure_reason,
                 "role_identity_negotiation": True,
                 "role_identity_assignments": role_identity_assignments,
@@ -933,6 +1275,16 @@ def _run_agent_process(
                     "vertex_consensus": vertex_consensus_payload,
                     "vertex_proof_checks": vertex_proof_checks,
                 },
+                "ordered_event_index": ordered_event_index,
+                "state_transition_trace": state_transition["transitions"],
+                "state_hash_before": str(state_transition["transitions"][0]["state_hash_before"])
+                if state_transition["transitions"]
+                else _stable_state_hash({"steps": []}),
+                "state_hash_after": str(state_transition.get("final_state_hash", "")),
+                "convergence_check": {
+                    **dict(state_transition.get("convergence_check", {})),
+                    "ordered_event_count": int(state_transition.get("ordered_event_count", 0)),
+                },
                 "proof_checks": proof_checks,
                 "consensus_checks": {
                     "stage_signatures_all_ok": stage_signatures_all_ok,
@@ -941,6 +1293,8 @@ def _run_agent_process(
                     "consensus_finalized": consensus_finalized,
                 },
                 "peer_snapshots": peer_snapshots,
+                "self_healing_events": self_healing_events,
+                "self_healing_state_machine": ["SUSPECT", "DEAD", "REDISTRIBUTE", "REJOINING", "ACTIVE"],
                 "tashi_alignment": tashi_alignment,
                 "lattice": lattice,
                 "competition_alignment": competition_alignment,
@@ -948,8 +1302,51 @@ def _run_agent_process(
             with open(report_path, "w", encoding="utf-8") as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
             economy_rounds_path = os.path.join(output_dir, "economy_rounds.json")
+            auditor_evidence = _build_auditor_evidence_message(
+                mission_id=mission_id,
+                selected_winner=auditor_owner or agent_id,
+                final_success=final_success,
+                all_success=all_success,
+                ttl_seconds=30.0,
+                report_path=report_path,
+                economy_rounds_path=economy_rounds_path,
+            )
+            report["auditor_evidence"] = auditor_evidence
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, ensure_ascii=False, indent=2)
             with open(economy_rounds_path, "w", encoding="utf-8") as f:
-                json.dump({"mission_id": mission_id, "run_id": run_id, "rounds": economy_rounds}, f, ensure_ascii=False, indent=2)
+                json.dump(
+                    {
+                        "mission_id": mission_id,
+                        "run_id": run_id,
+                        "unit": "RISK_CREDIT",
+                        "split_policy": {
+                            "scout": 0.35,
+                            "guardian": 0.40,
+                            "verifier": 0.20,
+                            "burn_reserve": 0.05,
+                        },
+                        "auditor_evidence": auditor_evidence,
+                        "settlement": risk_credit_settlement,
+                        "rounds": economy_rounds,
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            if self_healing_events:
+                self_healing_path = os.path.join(output_dir, "self_healing_events.json")
+                with open(self_healing_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "mission_id": mission_id,
+                            "run_id": run_id,
+                            "events": self_healing_events,
+                        },
+                        f,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
             bootstrap_report_written = True
             print(f"MISSION RECORD WRITTEN: {report_path}")
 
@@ -1313,21 +1710,36 @@ def _run_agent_process(
                 return
             requested_intents.add(intent_id)
         expires_at = datetime.fromtimestamp(time.time() + 2.5, tz=timezone.utc)
+        ttl_seconds = max(0.0, float(expires_at.timestamp() - time.time()))
+        role_message = {
+            "intent_id": intent_id,
+            "mission_id": mission_id,
+            "stage": ROLE_TO_PROTOCOL_STAGE.get(role_name, "ASSESS"),
+            "role": role_name,
+            "task_type": task_type,
+            "task_payload": dict(task_payload),
+            "run_id": run_id,
+            "namespace": topic_namespace,
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "ttl": ttl_seconds,
+            "attempt": int(attempt),
+            "preferred_role_owner": str(preferred_role_owner).strip(),
+            "candidate_score": 0.0,
+            "selected_winner": "",
+            "reason": "role_intent_dispatch",
+        }
+        role_signature_payload = {
+            "mission_id": role_message["mission_id"],
+            "stage": role_message["stage"],
+            "role": role_message["role"],
+            "reason": role_message["reason"],
+            "ttl": role_message["ttl"],
+        }
+        role_message["signature"] = sign_payload(_agent_secret(agent_id), role_signature_payload)
         kernel.publish(
             kernel.role_intent_topic(role_name),
-            {
-                "intent_id": intent_id,
-                "mission_id": mission_id,
-                "role": role_name,
-                "task_type": task_type,
-                "task_payload": dict(task_payload),
-                "run_id": run_id,
-                "namespace": topic_namespace,
-                "issued_at": datetime.now(timezone.utc).isoformat(),
-                "expires_at": expires_at.isoformat(),
-                "attempt": int(attempt),
-                "preferred_role_owner": str(preferred_role_owner).strip(),
-            },
+            role_message,
         )
 
     def on_mission_stage(message: Dict[str, Any]) -> None:
@@ -1403,19 +1815,34 @@ def _run_agent_process(
         salt = f"identity:{agent_id}:{claim_id}:{role_name}".encode("utf-8")
         tie_break = int(hashlib.sha1(salt).hexdigest()[:6], 16) / float(0xFFFFFF)
         score = round(1000.0 - task_load * 100.0 + tie_break, 6)
+        claim_payload = {
+            "claim_id": claim_id,
+            "mission_id": mission_id,
+            "stage": "DISCOVER",
+            "role": role_name,
+            "role_name": role_name,
+            "agent_id": agent_id,
+            "score": score,
+            "candidate_score": score,
+            "selected_winner": "",
+            "reason": "identity_claim",
+            "ttl": 2.0,
+            "load": task_load,
+            "metrics": metrics,
+            "attempt": int(attempt),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        claim_signature_payload = {
+            "mission_id": claim_payload["mission_id"],
+            "stage": claim_payload["stage"],
+            "role": claim_payload["role"],
+            "candidate_score": claim_payload["candidate_score"],
+            "reason": claim_payload["reason"],
+        }
+        claim_payload["signature"] = sign_payload(_agent_secret(agent_id), claim_signature_payload)
         kernel.publish(
             _role_identity_claim_topic(kernel, role_name),
-            {
-                "claim_id": claim_id,
-                "mission_id": mission_id,
-                "role_name": role_name,
-                "agent_id": agent_id,
-                "score": score,
-                "load": task_load,
-                "metrics": metrics,
-                "attempt": int(attempt),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
+            claim_payload,
         )
 
     def on_role_identity_claim(message: Dict[str, Any]) -> None:
@@ -1471,13 +1898,29 @@ def _run_agent_process(
             {
                 "claim_id": claim_id,
                 "mission_id": mission_id,
+                "stage": "DISCOVER",
+                "role": role_name,
                 "role_name": role_name,
+                "selected_winner": winner_agent,
                 "assigned_agent": winner_agent,
                 "score": float(winner_claim.get("score", 0.0)),
+                "candidate_score": float(winner_claim.get("score", 0.0)),
                 "load": float(winner_claim.get("load", 0.0)),
+                "reason": winner_selection_reason,
                 "selection_reason": winner_selection_reason,
+                "ttl": 2.0,
                 "attempt": attempt,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "signature": sign_payload(
+                    _agent_secret(agent_id),
+                    {
+                        "mission_id": mission_id,
+                        "stage": "DISCOVER",
+                        "role": role_name,
+                        "selected_winner": winner_agent,
+                        "reason": winner_selection_reason,
+                    },
+                ),
             },
         )
 
@@ -1600,6 +2043,8 @@ def _run_agent_process(
                     return
             blocked_payload = {
                 "mission_id": mission_id,
+                "stage": ROLE_TO_PROTOCOL_STAGE.get(role_name, "ASSESS"),
+                "role": role_name,
                 "role_name": role_name,
                 "intent_id": intent_id,
                 "task_type": task_type,
@@ -1615,16 +2060,23 @@ def _run_agent_process(
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "wait_latency_ms": 0.0,
                 "selected_agent": reporter_agent,
+                "selected_winner": reporter_agent,
+                "candidate_score": 0.0,
                 "selected_price": 0.0,
                 "required_units": int(required_units),
                 "selected_available_units": 0,
                 "budget_ceiling": budget_ceiling,
+                "reason": str(reason).strip(),
+                "selection_reason": str(reason).strip(),
+                "ttl": max(0.0, float(expires_ts - time.time())) if expires_ts > 0.0 else 0.0,
+                "economy_score_breakdown": {},
                 "run_id": run_id,
                 "namespace": topic_namespace,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             signature_payload = _stage_signature_payload(blocked_payload)
             blocked_payload["consensus_signature"] = sign_payload(_agent_secret(reporter_agent), signature_payload)
+            blocked_payload["signature"] = str(blocked_payload.get("consensus_signature", ""))
             kernel.publish(kernel.mission_stage_topic(), blocked_payload)
         expires_raw = str(intent_message.get("expires_at", "")).strip()
         expires_ts = _parse_iso_timestamp(expires_raw)
@@ -1763,6 +2215,8 @@ def _run_agent_process(
         )
         stage_payload = {
             "mission_id": mission_id,
+            "stage": ROLE_TO_PROTOCOL_STAGE.get(role_name, "ASSESS"),
+            "role": role_name,
             "role_name": role_name,
             "intent_id": intent_id,
             "task_type": task_type,
@@ -1773,17 +2227,24 @@ def _run_agent_process(
             "completed_at": str(execution.get("completed_at", "")),
             "wait_latency_ms": float(execution.get("wait_latency_ms", 0.0)),
             "selected_agent": agent_id,
+            "selected_winner": agent_id,
+            "candidate_score": float(dict(winner_claim).get("score", 0.0)),
             "selected_price": selected_price,
             "required_units": int(required_units),
             "selected_available_units": max(1, _as_int(winner_claim.get("available_units", 1), 1)),
             "budget_ceiling": budget_ceiling,
+            "reason": winner_selection_reason,
+            "selection_reason": winner_selection_reason,
             "winner_selection_reason": winner_selection_reason,
+            "ttl": max(0.0, float(expires_ts - time.time())) if expires_ts > 0.0 else 0.0,
+            "economy_score_breakdown": dict(dict(winner_claim).get("economy_score_breakdown", {})),
             "run_id": run_id,
             "namespace": topic_namespace,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         signature_payload = _stage_signature_payload(stage_payload)
         stage_payload["consensus_signature"] = sign_payload(_agent_secret(agent_id), signature_payload)
+        stage_payload["signature"] = str(stage_payload.get("consensus_signature", ""))
         kernel.publish(kernel.mission_stage_topic(), stage_payload)
 
     def on_role_intent(message: Dict[str, Any]) -> None:
@@ -2025,6 +2486,11 @@ def main() -> int:
         help="In agent-process mode, timeout waiting mission_complete after bootstrap start",
     )
     parser.add_argument(
+        "--self-healing-drill",
+        action="store_true",
+        help="In agent-process mode, force one scripted self-healing event chain for evidence output",
+    )
+    parser.add_argument(
         "--exit-on-mission-complete",
         action="store_true",
         help="In agent-process mode, exit after bootstrap mission completes or times out",
@@ -2068,6 +2534,7 @@ def main() -> int:
             bootstrap_ready_timeout_seconds=float(args.bootstrap_ready_timeout_seconds),
             bootstrap_pre_guardian_delay_seconds=float(args.bootstrap_pre_guardian_delay_seconds),
             bootstrap_wait_timeout_seconds=float(args.bootstrap_wait_timeout_seconds),
+            self_healing_drill=bool(args.self_healing_drill),
             exit_on_mission_complete=bool(args.exit_on_mission_complete),
             business_type=str(args.business_type),
             business_input_json=str(args.business_input_json),

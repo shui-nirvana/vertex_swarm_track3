@@ -53,6 +53,7 @@ class PanelServerTests(unittest.TestCase):
                     "business_type": "risk_control",
                     "business_context": {"scenario": "risk_control_high_velocity_withdrawal"},
                 },
+                "protocol_roles": ["scout", "guardian", "verifier", "auditor"],
                 "agent_announcements": [
                     {"agent_id": "agent-a", "roles": ["scout"], "active_peer_count": 2, "timestamp": "t1"},
                     {"agent_id": "agent-b", "roles": ["guardian"], "active_peer_count": 2, "timestamp": "t2"},
@@ -99,6 +100,7 @@ class PanelServerTests(unittest.TestCase):
             self.assertEqual(stage_states.get("scout"), "done")
             self.assertEqual(stage_states.get("guardian"), "running")
             self.assertEqual(stage_states.get("verifier"), "pending")
+            self.assertEqual(stage_states.get("auditor"), "pending")
             self.assertEqual(int(stage_durations.get("scout") or 0), 0)
             timeline = _build_timeline(record, limit=200, offset=0)
             self.assertEqual(len(timeline["timeline"]), 1)
@@ -178,6 +180,7 @@ class PanelServerTests(unittest.TestCase):
                     "scout": {"assigned_agent": "agent-a"},
                     "guardian": {"assigned_agent": "agent-b"},
                     "verifier": {"assigned_agent": "agent-c"},
+                    "auditor": {"assigned_agent": "agent-c"},
                 },
                 "agent_announcements": [
                     {"agent_id": "agent-a", "roles": ["scout"], "timestamp": "2026-01-01T00:00:00+00:00"},
@@ -220,6 +223,7 @@ class PanelServerTests(unittest.TestCase):
                     "scout": {"assigned_agent": "agent-a"},
                     "guardian": {"assigned_agent": "agent-b"},
                     "verifier": {"assigned_agent": "agent-c"},
+                    "auditor": {"assigned_agent": "agent-c"},
                 },
                 "agent_announcements": [
                     {"agent_id": "agent-a", "roles": ["scout"]},

@@ -126,6 +126,40 @@ sequenceDiagram
 - Per-intent snapshots are persisted in `economy_rounds` with candidate data and budget/units rejection counters.
 - Mission-level aggregation is persisted in `economy_summary` and exported via `artifacts/.../economy_rounds.json`.
 
+### Role Responsibility and Capability Mapping (Risk Control)
+
+| Role     | Primary responsibility                   | Input                                              | Output evidence                                             |
+| :------- | :--------------------------------------- | :------------------------------------------------- | :---------------------------------------------------------- |
+| Scout    | Identify and assess risk signals         | mission payload / business context                 | stage result, candidate score, selection reason             |
+| Guardian | Execute mitigation and control actions   | scout output / mitigation constraints              | mitigation decision, rollback markers, signed stage payload |
+| Verifier | Verify closure and residual risk         | guardian result / monitoring window                | verification decision, mission completion status            |
+| Auditor  | Synthesize final evidence at CLOSE stage | mission record / proof checks / economy settlement | `auditor_evidence`, signed CLOSE-stage evidence payload     |
+
+Capability mapping:
+
+| Focus area                | Implementation in this project                                                                                                                          | Evidence artifact                                                                                                          |
+| :------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------- |
+| Multi-role protocol       | Native Scout/Guardian/Verifier execution roles + Auditor evidence role with protocol phases `DISCOVER -> ASSESS -> PLAN -> MITIGATE -> VERIFY -> CLOSE` | `multiprocess_mission_record.json` (`protocol_roles`, `protocol_phases`, `steps`, `auditor_evidence`, `business_flow_log`) |
+| Deterministic convergence | Vertex ordered events with deterministic replay state hashing                                                                                           | `multiprocess_mission_record.json` (`ordered_event_index`, `state_hash_before`, `state_hash_after`, `convergence_check`)   |
+| Economy settlement        | `RISK_CREDIT` escrow + split (Scout 35 / Guardian 40 / Verifier 20 / Burn-Reserve 5)                                                                    | `economy_rounds.json` (`unit`, `split_policy`, `settlement`)                                                               |
+| Self-healing evidence     | Recovery event chain (`heartbeat_miss`, `quorum_confirmed_dead`, `role_redistributed`, `agent_rejoined`)                                                | `self_healing_events.json` and `multiprocess_mission_record.json` (`self_healing_events`)                                  |
+
+Deterministic convergence statement:
+
+- Same ordered event stream => same final state hash (`deterministic_replay_match=true`).
+- Runtime execution roles are `Scout / Guardian / Verifier`; `Auditor` serves as the evidence-synthesizer role at `CLOSE` stage.
+- For resilience evidence drill, use `--self-healing-drill` to emit a complete `SUSPECT -> DEAD -> REDISTRIBUTE -> REJOINING -> ACTIVE` chain in artifacts.
+
+```powershell
+python -m security_monitor.track3.main --run-id track3-drill --transport mqtt --mqtt-addr 127.0.0.1:1883 --mode internal-single --self-healing-drill
+```
+
+Expected artifacts after the drill run:
+
+- `artifacts/track3-drill/multiprocess_mission_record.json`
+- `artifacts/track3-drill/economy_rounds.json`
+- `artifacts/track3-drill/self_healing_events.json`
+
 ## Core Modules
 
 - `security_monitor/track3/`: runtime entrypoint and protocol orchestration.
